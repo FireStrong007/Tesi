@@ -46,6 +46,16 @@ const niceMax = (v: number) => {
 const fmtShortDate = (t: number) => new Date(t * 1000).toLocaleDateString("it-IT", { day: "numeric", month: "short" });
 const hoursLabel = (w: TimeWindow) => `${fmtTime(w.from)}–${fmtTime(w.to)}`;
 
+/**
+ * Zoomable data layers are drawn once with x = seconds since `origin`; this transform maps
+ * them onto the plot for the current view, so zooming and panning only change one attribute
+ * instead of rebuilding every path. Strokes use vector-effect="non-scaling-stroke".
+ */
+const toView = (origin: number, view: TimeWindow, plotLeft: number, plotW: number) => {
+  const a = plotW / (view.to - view.from || 1);
+  return `matrix(${a} 0 0 1 ${plotLeft + (origin - view.from) * a} 0)`;
+};
+
 /** SVG ids may not contain the characters React puts in useId() */
 const useClipId = () => "clip" + useId().replace(/[^a-zA-Z0-9_-]/g, "");
 
@@ -453,15 +463,8 @@ export function TimeChart({
   const y = (v: number) => padT + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
 
   const background = useMemo(
-    () =>
-      w > 0 && (
-        <g clipPath={`url(#${clip})`}>
-          {bands.map((b, i) => (
-            <rect key={i} x={x(Math.max(b.start, vf))} y={padT} width={Math.max(0, x(Math.min(b.end, vt)) - x(Math.max(b.start, vf)))} height={plotH} fill={b.color} />
-          ))}
-        </g>
-      ),
-    [bands, w, vf, vt, plotH, clip], // eslint-disable-line react-hooks/exhaustive-deps
+    () => bands.map((b, i) => <rect key={i} x={b.start - from} y={padT} width={Math.max(0, b.end - b.start)} height={plotH} fill={b.color} />),
+    [bands, from, plotH],
   );
 
   const axes = useMemo(() => {
@@ -497,35 +500,42 @@ export function TimeChart({
     );
   }, [w, vf, vt, from, to, lo, hi, plotH, height, xTicks, refLines, format]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // built once per data change, in seconds since `from` (see toView)
   const data = useMemo(() => {
-    if (!w) return null;
-    return (
-      <g clipPath={`url(#${clip})`}>
-        {series.map((s, i) => {
-          const pts = visibleSlice(s.points, vf, vt);
-          if (s.kind === "bars")
-            return (
-              <g key={i}>
-                {pts.map((p, k) => {
-                  const next = pts[k + 1];
-                  const span = Math.min(next ? next.timestamp - p.timestamp : 180, s.gap ?? 300);
-                  const bw = Math.max(1, x(p.timestamp + span) - x(p.timestamp) - 0.5);
-                  return <rect key={p.timestamp} x={x(p.timestamp)} y={y(p.value)} width={bw} height={Math.max(0, y(lo) - y(p.value))} fill={s.colorOf?.(p.value) ?? s.color} />;
-                })}
-              </g>
-            );
-          const { d, area } = seriesPaths(s, pts, x, y, lo);
-          return (
-            <g key={i}>
-              {s.area && <path d={area} fill={s.color} opacity={0.18} />}
-              <path d={d} fill="none" stroke={s.color} strokeWidth={s.width ?? 1.75} strokeLinejoin="round" strokeLinecap="round" />
-              {s.dots && pts.map((p) => <circle key={p.timestamp} cx={x(p.timestamp)} cy={y(p.value)} r={2.5} fill={s.color} />)}
-            </g>
-          );
-        })}
-      </g>
-    );
-  }, [series, w, vf, vt, lo, hi, plotH, clip]); // eslint-disable-line react-hooks/exhaustive-deps
+    const sx = (t: number) => t - from;
+    const base = y(lo).toFixed(1);
+    return series.map((s, i) => {
+      if (s.kind === "bars") {
+        // one path per color instead of one <rect> per minute
+        const byColor = new Map<string, string>();
+        s.points.forEach((p, k) => {
+          const next = s.points[k + 1];
+          const span = Math.min(next ? next.timestamp - p.timestamp : 180, s.gap ?? 300);
+          const c = s.colorOf?.(p.value) ?? s.color;
+          byColor.set(c, (byColor.get(c) ?? "") + `M${sx(p.timestamp)},${base}V${y(p.value).toFixed(1)}h${span}V${base}Z`);
+        });
+        return (
+          <g key={i}>
+            {[...byColor].map(([c, d]) => (
+              <path key={c} d={d} fill={c} />
+            ))}
+          </g>
+        );
+      }
+      const { d, area } = seriesPaths(s, s.points, sx, y, lo);
+      return (
+        <g key={i}>
+          {s.area && <path d={area} fill={s.color} opacity={0.18} />}
+          <path d={d} fill="none" stroke={s.color} strokeWidth={s.width ?? 1.75} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        </g>
+      );
+    });
+  }, [series, from, lo, hi, plotH]); // eslint-disable-line react-hooks/exhaustive-deps
+  const transform = toView(from, ix.view, padL, plotW);
+  // dots stay round, so they are placed in view coordinates (they are few: hourly or daily values)
+  const dots =
+    w > 0 &&
+    series.map((s, i) => s.dots && visibleSlice(s.points, vf, vt).map((p) => <circle key={`${i}:${p.timestamp}`} cx={x(p.timestamp)} cy={y(p.value)} r={2.5} fill={s.color} />));
 
   let hover: ReactNode = null;
   if (ix.hoverX !== null && w > 0) {
@@ -568,9 +578,14 @@ export function TimeChart({
           <rect x={padL} y={0} width={plotW} height={height} />
         </clipPath>
       </defs>
-      {background}
+      <g clipPath={`url(#${clip})`}>
+        <g transform={transform}>{background}</g>
+      </g>
       {axes}
-      {data}
+      <g clipPath={`url(#${clip})`}>
+        <g transform={transform}>{data}</g>
+        {dots}
+      </g>
       {hover}
     </Surface>
   );
@@ -643,34 +658,31 @@ export function Hypnogram({ segments, from, to, height = 170, overlay }: { segme
     );
   }, [w, vf, vt, padR, height, overlay, oLo, oHi]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // built once per data change, in seconds since `from` (see toView)
   const data = useMemo(() => {
-    if (!w) return null;
     let path = "";
     let prev: number | null = null;
-    for (const p of visibleSlice(overlay?.points ?? [], vf, vt)) {
-      path += `${prev === null || p.timestamp - prev > 900 ? "M" : "L"}${x(p.timestamp).toFixed(1)},${yO(p.value).toFixed(1)}`;
+    for (const p of overlay?.points ?? []) {
+      path += `${prev === null || p.timestamp - prev > 900 ? "M" : "L"}${p.timestamp - from},${yO(p.value).toFixed(1)}`;
       prev = p.timestamp;
     }
     return (
-      <g clipPath={`url(#${clip})`}>
-        {segments
-          .filter((s) => s.end >= vf && s.start <= vt)
-          .map((s) => (
-            <rect
-              key={`${s.start}:${s.end}`}
-              x={x(s.start)}
-              y={STAGE_ROW[s.stage] * rowH + 3}
-              width={Math.max(1, x(s.end) - x(s.start))}
-              height={rowH - 6}
-              rx={2}
-              fill={STAGE_COLOR[s.stage]}
-              opacity={overlay ? 0.75 : 1}
-            />
-          ))}
-        {overlay && <path d={path} fill="none" stroke={overlay.color} strokeWidth={1.5} strokeLinejoin="round" />}
-      </g>
+      <>
+        {segments.map((s) => (
+          <rect
+            key={`${s.start}:${s.end}`}
+            x={s.start - from}
+            y={STAGE_ROW[s.stage] * rowH + 3}
+            width={Math.max(0, s.end - s.start)}
+            height={rowH - 6}
+            fill={STAGE_COLOR[s.stage]}
+            opacity={overlay ? 0.75 : 1}
+          />
+        ))}
+        {overlay && <path d={path} fill="none" stroke={overlay.color} strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
+      </>
     );
-  }, [segments, overlay, w, vf, vt, padR, height, oLo, oHi, clip]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [segments, overlay, from, height, oLo, oHi]); // eslint-disable-line react-hooks/exhaustive-deps
 
   let hover: ReactNode = null;
   if (ix.hoverX !== null && w > 0) {
@@ -700,7 +712,9 @@ export function Hypnogram({ segments, from, to, height = 170, overlay }: { segme
         </clipPath>
       </defs>
       {axes}
-      {data}
+      <g clipPath={`url(#${clip})`}>
+        <g transform={toView(from, ix.view, padL, plotW)}>{data}</g>
+      </g>
       {hover}
     </Surface>
   );
@@ -755,26 +769,27 @@ export function ActivitySleepChart({ slots, hr, from, to, height = 190 }: { slot
     );
   }, [w, vf, vt, height, hrMax]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // built once per data change, in seconds since `from` (see toView)
   const data = useMemo(() => {
-    if (!w) return null;
-    const slotW = Math.max(1, plotW / ((vt - vf) / 300));
     let d = "";
     let prev: number | null = null;
-    for (const p of visibleSlice(hr, vf, vt)) {
-      d += `${prev === null || p.timestamp - prev > 1800 ? "M" : "L"}${x(p.timestamp).toFixed(1)},${yHr(p.value).toFixed(1)}`;
+    for (const p of hr) {
+      d += `${prev === null || p.timestamp - prev > 1800 ? "M" : "L"}${p.timestamp - from},${yHr(p.value).toFixed(1)}`;
       prev = p.timestamp;
     }
+    // one path per color instead of one <rect> per slot (adjacent slots join without seams)
+    const byColor = new Map<string, string>();
+    const bottom = (6 + plotH).toFixed(1);
+    for (const s of slots) byColor.set(s.color, (byColor.get(s.color) ?? "") + `M${s.t - from},${bottom}V${(6 + plotH * (1 - s.level)).toFixed(1)}h302V${bottom}Z`);
     return (
-      <g clipPath={`url(#${clip})`}>
-        {slots
-          .filter((s) => s.t + 300 >= vf && s.t <= vt)
-          .map((s) => (
-            <rect key={s.t} x={x(s.t)} y={6 + plotH * (1 - s.level)} width={slotW + 0.3} height={plotH * s.level} fill={s.color} />
-          ))}
-        <path d={d} fill="none" stroke="var(--heart)" strokeWidth={1.4} strokeLinejoin="round" />
-      </g>
+      <>
+        {[...byColor].map(([c, p]) => (
+          <path key={c} d={p} fill={c} />
+        ))}
+        <path d={d} fill="none" stroke="var(--heart)" strokeWidth={1.4} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      </>
     );
-  }, [slots, hr, w, vf, vt, height, hrMax, clip]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slots, hr, from, height, hrMax]); // eslint-disable-line react-hooks/exhaustive-deps
 
   let hover: ReactNode = null;
   if (ix.hoverX !== null && w > 0) {
@@ -804,7 +819,9 @@ export function ActivitySleepChart({ slots, hr, from, to, height = 190 }: { slot
         </clipPath>
       </defs>
       {axes}
-      {data}
+      <g clipPath={`url(#${clip})`}>
+        <g transform={toView(from, ix.view, padL, plotW)}>{data}</g>
+      </g>
       {hover}
     </Surface>
   );

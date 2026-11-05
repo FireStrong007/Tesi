@@ -8,7 +8,8 @@
  * Mouse:  hover = tooltip, drag = pan (when zoomed), ctrl+wheel or trackpad pinch = zoom,
  *         horizontal wheel = pan, double click = zoom in / reset.
  *
- * Hover and zoom updates are coalesced to one per animation frame.
+ * Hover and zoom updates are coalesced to one per animation frame; discrete zoom steps
+ * (buttons, double tap, mouse wheel notches) are animated instead of jumping.
  */
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 
@@ -41,6 +42,25 @@ type Gesture =
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const TAP_SLOP = 10;
 const DOUBLE_TAP_MS = 320;
+const ANIM_MS = 280;
+const easeOut = (k: number) => 1 - Math.pow(1 - k, 3);
+
+/**
+ * Window between a and b at progress e (0..1). The span changes geometrically around the
+ * point that keeps its relative position, so zooming looks uniform rather than accelerating.
+ */
+function interpolate(a: TimeWindow, b: TimeWindow, e: number): TimeWindow {
+  const s0 = a.to - a.from;
+  const s1 = b.to - b.from;
+  if (Math.abs(s1 - s0) < s0 * 1e-6) {
+    const f = a.from + (b.from - a.from) * e;
+    return { from: f, to: f + s0 };
+  }
+  const p = (b.from * s0 - a.from * s1) / (s0 - s1);
+  const r = (p - a.from) / s0;
+  const s = s0 * Math.pow(s1 / s0, e);
+  return { from: p - r * s, to: p - r * s + s };
+}
 
 export function useChartInteraction(o: ChartInteractionOptions) {
   const { from, to, zoomable = false } = o;
@@ -49,6 +69,8 @@ export function useChartInteraction(o: ChartInteractionOptions) {
   const [panning, setPanning] = useState(false);
   /** latest requested window, ahead of React state while a frame is pending */
   const winRef = useRef<TimeWindow | null>(null);
+  /** running zoom animation (requestAnimationFrame id) */
+  const anim = useRef(0);
 
   // another day / workout: back to the full range
   const rangeKey = `${from}:${to}`;
@@ -58,6 +80,8 @@ export function useChartInteraction(o: ChartInteractionOptions) {
     setWin(null);
     setHoverX(null);
     winRef.current = null;
+    cancelAnimationFrame(anim.current);
+    anim.current = 0;
   }
 
   const view = win ?? { from, to };
@@ -79,7 +103,44 @@ export function useChartInteraction(o: ChartInteractionOptions) {
       if ("win" in q) setWin(q.win ?? null);
     });
   }, []);
-  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(frame.current);
+      cancelAnimationFrame(anim.current);
+    },
+    [],
+  );
+
+  /** stops a running animation where it is, so a gesture continues from what is on screen */
+  const stopAnim = () => {
+    if (!anim.current) return;
+    cancelAnimationFrame(anim.current);
+    anim.current = 0;
+    const v = live.current.view;
+    winRef.current = fit(v.from, v.to - v.from);
+  };
+
+  /** animates from what is on screen to `target` (null = full range) */
+  const animateTo = (target: TimeWindow | null) => {
+    cancelAnimationFrame(anim.current);
+    const L = live.current;
+    const start = L.view;
+    const end = target ?? { from: L.from, to: L.to };
+    // repeated steps (e.g. tapping + quickly) compound from the target, not from the frame on screen
+    winRef.current = target;
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / ANIM_MS);
+      if (k < 1) {
+        setWin(interpolate(start, end, easeOut(k)));
+        anim.current = requestAnimationFrame(step);
+      } else {
+        anim.current = 0;
+        setWin(target);
+      }
+    };
+    anim.current = requestAnimationFrame(step);
+  };
 
   // ---- window math (always reads the latest props through `live`)
   const fit = useCallback((start: number, span: number): TimeWindow | null => {
@@ -96,15 +157,14 @@ export function useChartInteraction(o: ChartInteractionOptions) {
     const L = live.current;
     return w.from + ((x - L.plotLeft) / Math.max(1, L.plotWidth)) * (w.to - w.from);
   };
-  const zoomAround = useCallback(
-    (t: number, factor: number) => {
-      const w = current();
-      const span = w.to - w.from;
-      const next = span / factor;
-      schedule({ win: fit(t - ((t - w.from) / span) * next, next) });
-    },
-    [fit, schedule], // eslint-disable-line react-hooks/exhaustive-deps
-  );
+  const zoomAround = (t: number, factor: number, animated = false) => {
+    const w = current();
+    const span = w.to - w.from;
+    const next = span / factor;
+    const target = fit(t - ((t - w.from) / span) * next, next);
+    if (animated) animateTo(target);
+    else schedule({ win: target });
+  };
 
   // ---- pointer handling
   const pts = useRef(new Map<number, { x: number; y: number }>());
@@ -120,8 +180,8 @@ export function useChartInteraction(o: ChartInteractionOptions) {
     const prev = lastTap.current;
     if (L.zoomable && prev && now - prev.t < DOUBLE_TAP_MS && Math.abs(prev.x - x) < 30) {
       lastTap.current = null;
-      if (winRef.current) schedule({ win: null });
-      else zoomAround(timeAtIn(current(), x), 3);
+      if (winRef.current) animateTo(null);
+      else zoomAround(timeAtIn(current(), x), 3, true);
       return;
     }
     lastTap.current = { x, t: now };
@@ -136,6 +196,7 @@ export function useChartInteraction(o: ChartInteractionOptions) {
 
   const onPointerDown = (e: ReactPointerEvent<HTMLElement>) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    stopAnim();
     const x = relX(e);
     pts.current.set(e.pointerId, { x, y: relY(e) });
     // keep receiving the moves even if the element under the finger is re-rendered away
@@ -239,9 +300,17 @@ export function useChartInteraction(o: ChartInteractionOptions) {
       const x = relX(e);
       if (e.ctrlKey) {
         e.preventDefault();
-        zoomAround(timeAtIn(current(), x), Math.exp(-clamp(e.deltaY, -50, 50) * 0.02));
+        const t = timeAtIn(current(), x);
+        // a mouse wheel notch (or line/page mode) is a discrete step: animate it;
+        // trackpad pinches send many small deltas: follow them directly
+        if (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 40) zoomAround(t, e.deltaY < 0 ? 1.5 : 1 / 1.5, true);
+        else {
+          stopAnim();
+          zoomAround(t, Math.exp(-e.deltaY * 0.012));
+        }
       } else if (winRef.current && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
         e.preventDefault();
+        stopAnim();
         const w = current();
         const span = w.to - w.from;
         schedule({ win: fit(w.from + (e.deltaX / Math.max(1, live.current.plotWidth)) * span, span) });
@@ -249,7 +318,7 @@ export function useChartInteraction(o: ChartInteractionOptions) {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [o.ref, zoomable, zoomAround, fit, schedule]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [o.ref, zoomable, fit, schedule]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const center = () => {
     const w = current();
@@ -263,9 +332,9 @@ export function useChartInteraction(o: ChartInteractionOptions) {
     zoom: (to - from) / Math.max(1, view.to - view.from),
     hoverX,
     panning,
-    zoomIn: () => zoomAround(center(), 2),
-    zoomOut: () => zoomAround(center(), 0.5),
-    reset: () => schedule({ win: null }),
+    zoomIn: () => zoomAround(center(), 2, true),
+    zoomOut: () => zoomAround(center(), 0.5, true),
+    reset: () => animateTo(null),
     handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onPointerLeave },
   };
 }
