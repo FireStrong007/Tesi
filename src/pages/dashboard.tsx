@@ -14,7 +14,7 @@ import {
   WindIcon,
   ZapIcon,
 } from "lucide-react";
-import { useApp } from "@/app-context";
+import { useApp, useLive } from "@/app-context";
 import { DayRing, Legend } from "@/components/charts/charts";
 import { DateNav, PageBody, PageHeader } from "@/components/page";
 import { Button } from "@/components/ui/button";
@@ -60,7 +60,8 @@ function Tile({ icon, label, color, value, unit, sub, onClick, children, live }:
 }
 
 export function DashboardPage() {
-  const { db, user, devices, live, manager } = useApp();
+  const { db, user, devices, manager } = useApp();
+  const live = useLive();
   const [day, setDay] = useState(() => startOfDay(Date.now() / 1000));
   const { data: d } = useQuery(() => loadDay(db, user.id, day), [day, user.id]);
   const syncing = devices.find((dev) => live.get(dev.id)?.state === "syncing" || live.get(dev.id)?.progress?.phase === "processing");

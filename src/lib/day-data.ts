@@ -1,6 +1,6 @@
 /** Loads and summarises everything shown for one day (dashboard + daily charts). */
 import type { MinuteSlot } from "@/components/charts/charts";
-import { STAGE_COLOR } from "./colors";
+import { STAGE_COLOR, STAGE_LABEL } from "./colors";
 import {
   activitySamples,
   addDays,
@@ -141,7 +141,7 @@ export async function loadDay(db: SqlExecutor, userId: number, from: number): Pr
     if (t > now) break;
     const seg = allSegments.find((g) => t + 150 >= g.start && t + 150 < g.end);
     if (seg) {
-      slots.push({ t, level: SLEEP_LEVEL[seg.stage] ?? 0.2, color: STAGE_COLOR[seg.stage] });
+      slots.push({ t, level: SLEEP_LEVEL[seg.stage] ?? 0.2, color: STAGE_COLOR[seg.stage], label: `Sonno: ${STAGE_LABEL[seg.stage] ?? "–"}` });
       lastWorn = b;
       continue;
     }
@@ -150,9 +150,9 @@ export async function loadDay(db: SqlExecutor, userId: number, from: number): Pr
       lastWorn = b;
       const st = rows.reduce((s, r) => s + r.steps, 0);
       const intense = rows.some((r) => (r.intensity ?? 0) >= 3 || r.activity_type === 1);
-      slots.push({ t, level: Math.max(0.04, Math.min(1, st / 650)), color: intense ? "var(--calories)" : "var(--steps)" });
+      slots.push({ t, level: Math.max(0.04, Math.min(1, st / 650)), color: intense ? "var(--calories)" : "var(--steps)", label: `${intense ? "Attività intensa" : "Attività"}: ${st} passi` });
     } else if (b - lastWorn > 3) {
-      slots.push({ t, level: 0.06, color: "var(--muted-foreground)" });
+      slots.push({ t, level: 0.06, color: "var(--muted-foreground)", label: "Non indossato" });
     }
   }
 

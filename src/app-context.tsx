@@ -12,18 +12,27 @@ interface AppValue {
   devices: Device[];
   refreshDevices: () => Promise<void>;
   manager: DeviceManager;
-  live: Map<number, LiveState>;
   /** increases after every sync/import so views reload their data */
   dataVersion: number;
   bumpData: () => void;
 }
 
 const Ctx = createContext<AppValue | null>(null);
+/**
+ * Live connection state changes about once a second while a band streams realtime
+ * values; it has its own context so that only the views that show it re-render.
+ */
+const LiveCtx = createContext<Map<number, LiveState>>(new Map());
 
 export function useApp(): AppValue {
   const v = useContext(Ctx);
   if (!v) throw new Error("useApp fuori da AppProvider");
   return v;
+}
+
+/** Connection state, sync progress and realtime values of every device. */
+export function useLive(): Map<number, LiveState> {
+  return useContext(LiveCtx);
 }
 
 let singleton: { db: DbClient; ready: Promise<InitInfo> } | null = null;
@@ -74,11 +83,15 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
   }, [manager, bumpData, refreshDevices]);
 
   const live = useSyncExternalStore(manager.subscribe, manager.getSnapshot);
+  const value = useMemo(
+    () => (dbInfo && user ? { db, dbInfo, user, refreshUser, devices, refreshDevices, manager, dataVersion, bumpData } : null),
+    [db, dbInfo, user, refreshUser, devices, refreshDevices, manager, dataVersion, bumpData],
+  );
 
-  if (error || !dbInfo || !user) return <>{fallback(error)}</>;
+  if (error || !value) return <>{fallback(error)}</>;
   return (
-    <Ctx.Provider value={{ db, dbInfo, user, refreshUser, devices, refreshDevices, manager, live, dataVersion, bumpData }}>
-      {children}
+    <Ctx.Provider value={value}>
+      <LiveCtx.Provider value={live}>{children}</LiveCtx.Provider>
     </Ctx.Provider>
   );
 }

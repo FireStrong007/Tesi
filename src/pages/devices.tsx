@@ -21,7 +21,7 @@ import {
   TriangleAlertIcon,
   WatchIcon,
 } from "lucide-react";
-import { useApp } from "@/app-context";
+import { useApp, useLive } from "@/app-context";
 import { EmptyState, PageBody, PageHeader } from "@/components/page";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +51,8 @@ const STATE_LABEL: Record<string, string> = {
 };
 
 export function DevicesPage() {
-  const { devices, live } = useApp();
+  const { devices } = useApp();
+  const live = useLive();
   const path = usePath();
   const [pairOpen, setPairOpen] = useState(query(path).get("pair") === "1");
   useEffect(() => {

@@ -2,28 +2,24 @@
  * Lightweight SVG charts in the spirit of Gadgetbridge's activity charts:
  * bar chart with goal line, time-series line/area chart, sleep hypnogram,
  * the 24 h "activity & sleep" chart, the dashboard 24 h ring and goal rings.
+ *
+ * Interaction (scrub tooltip, pinch/wheel zoom of the time axis) lives in
+ * ./interaction.ts. Each chart renders its axes and data as memoized layers,
+ * so moving the finger only re-renders the cursor and the tooltip.
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, type ReactNode, type RefObject } from "react";
+import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useSize } from "@/hooks/use-size";
 import { cn } from "@/lib/utils";
-import { fmtTime } from "@/lib/format";
+import { fmt1, fmtInt, fmtTime } from "@/lib/format";
 import type { SleepSegment, TimeValue } from "@/lib/db/repo";
+import { nearestPoint, pointAtOrBefore, useChartInteraction, visibleSlice, type ChartInteraction, type TimeWindow } from "./interaction";
 
 import { STAGE_COLOR, STAGE_LABEL } from "@/lib/colors";
 export { STAGE_COLOR, STAGE_LABEL };
 
-function Frame({ height, className, children }: { height: number; className?: string; children: (w: number) => ReactNode }) {
-  const [ref, size] = useSize<HTMLDivElement>();
-  return (
-    <div ref={ref} className={cn("relative w-full select-none", className)} style={{ height }}>
-      {size.width > 0 && (
-        <svg width={size.width} height={height} className="absolute inset-0 overflow-visible" role="img">
-          {children(size.width)}
-        </svg>
-      )}
-    </div>
-  );
-}
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /** rounds up to a "readable" step: 103 -> 120, 47 -> 48, 7300 -> 8000 */
 const niceCeil = (v: number) => {
@@ -46,6 +42,136 @@ const niceMax = (v: number) => {
   const n = v / p;
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
 };
+
+const fmtShortDate = (t: number) => new Date(t * 1000).toLocaleDateString("it-IT", { day: "numeric", month: "short" });
+const hoursLabel = (w: TimeWindow) => `${fmtTime(w.from)}–${fmtTime(w.to)}`;
+
+/** SVG ids may not contain the characters React puts in useId() */
+const useClipId = () => "clip" + useId().replace(/[^a-zA-Z0-9_-]/g, "");
+
+// ---------------------------------------------------------------- shared pieces
+
+/** Chart container: receives the gestures and shows the zoom bar while zoomed. */
+function Surface({
+  boxRef,
+  ix,
+  width,
+  height,
+  rangeLabel,
+  cursor,
+  children,
+}: {
+  boxRef: RefObject<HTMLDivElement | null>;
+  ix: ChartInteraction;
+  width: number;
+  height: number;
+  rangeLabel?: (w: TimeWindow) => string;
+  cursor?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <div
+        ref={boxRef}
+        {...ix.handlers}
+        className={cn("relative w-full select-none", ix.panning ? "cursor-grabbing" : ix.zoomed ? "cursor-grab" : cursor)}
+        // pan-y: vertical drags still scroll the page, horizontal drags and pinches come to the chart
+        style={{ height, touchAction: "pan-y", WebkitTapHighlightColor: "transparent" }}
+      >
+        {width > 0 && (
+          <svg width={width} height={height} className="absolute inset-0 overflow-visible" role="img">
+            {children}
+          </svg>
+        )}
+      </div>
+      {ix.zoomed && rangeLabel && <ZoomBar ix={ix} label={rangeLabel(ix.view)} />}
+    </div>
+  );
+}
+
+function ZoomBar({ ix, label }: { ix: ChartInteraction; label: string }) {
+  return (
+    <div className="text-muted-foreground mt-1.5 flex items-center gap-1 text-xs">
+      <span className="truncate tabular-nums">
+        {label} · {ix.zoom < 10 ? fmt1(ix.zoom) : fmtInt(ix.zoom)}×
+      </span>
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        <Button variant="ghost" size="icon" className="size-8" onClick={ix.zoomOut} aria-label="Riduci zoom">
+          <ZoomOutIcon />
+        </Button>
+        <Button variant="ghost" size="icon" className="size-8" onClick={ix.zoomIn} aria-label="Aumenta zoom">
+          <ZoomInIcon />
+        </Button>
+        <Button variant="outline" size="sm" className="h-8" onClick={ix.reset}>
+          <RotateCcwIcon />
+          Tutto
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+interface TipLine {
+  text: string;
+  color?: string;
+}
+
+/** Tooltip placed beside the cursor, on the side with more room, so a finger never covers it. */
+function Tooltip({ x, width, plotLeft, top, title, lines }: { x: number; width: number; plotLeft: number; top: number; title: string; lines: TipLine[] }) {
+  const chars = Math.max(title.length, ...lines.map((l) => l.text.length + (l.color ? 2 : 0)));
+  const tw = Math.ceil(16 + chars * 6.2);
+  const th = 20 + 14 * lines.length;
+  const left = Math.max(0, Math.min(x > (plotLeft + width) / 2 ? x - tw - 10 : x + 10, width - tw));
+  return (
+    <g pointerEvents="none" transform={`translate(${left},${top})`}>
+      <rect width={tw} height={th} rx={6} fill="var(--popover)" stroke="var(--border)" />
+      <text x={8} y={14} className="fill-muted-foreground text-[10px]">
+        {title}
+      </text>
+      {lines.map((l, i) => (
+        <g key={i}>
+          {l.color && <circle cx={11} cy={24 + i * 14} r={3} fill={l.color} />}
+          <text x={l.color ? 18 : 8} y={28 + i * 14} className="fill-foreground text-[11px] font-semibold">
+            {l.text}
+          </text>
+        </g>
+      ))}
+    </g>
+  );
+}
+
+function Cursor({ x, top, bottom }: { x: number; top: number; bottom: number }) {
+  return <line x1={x} x2={x} y1={top} y2={bottom} stroke="var(--muted-foreground)" strokeOpacity={0.6} pointerEvents="none" />;
+}
+
+const HOUR_STEPS = [300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400];
+
+/** hour ticks aligned to local time, as many as fit in the plot width */
+function hourTicks(from: number, to: number, plotW: number, wide: boolean) {
+  const maxLabels = Math.max(2, Math.floor(plotW / (wide ? 64 : 40)));
+  const step = HOUR_STEPS.find((s) => (to - from) / s <= maxLabels) ?? 86400;
+  const d = new Date(from * 1000);
+  d.setMinutes(0, 0, 0);
+  const ticks: number[] = [];
+  const start = d.getTime() / 1000;
+  if (step < 3600) {
+    for (let t = start; t <= to; t += step) if (t >= from) ticks.push(t);
+  } else {
+    for (let t = start; t <= to; t += 3600) if (t >= from && new Date(t * 1000).getHours() % (step / 3600) === 0) ticks.push(t);
+  }
+  const label = (t: number) => (step < 3600 || wide ? fmtTime(t) : String(new Date(t * 1000).getHours()));
+  return { ticks, label };
+}
+
+/** one tick per day of [from, to], thinned out to fit; only those inside the view */
+function dayTicks(from: number, to: number, view: TimeWindow, plotW: number) {
+  const maxLabels = Math.max(2, Math.floor(plotW / 26));
+  const n = (view.to - view.from) / 86400;
+  const k = [1, 2, 3, 5, 7, 14].find((k) => n / k <= maxLabels) ?? 14;
+  const ticks: number[] = [];
+  for (let i = 0, t = from; t <= to; i++, t = from + i * 86400) if (i % k === 0 && t >= view.from - 1 && t <= view.to + 1) ticks.push(t);
+  return ticks;
+}
 
 // ---------------------------------------------------------------- bar chart
 
@@ -97,111 +223,134 @@ export function BarChart({
   yMin?: number;
   yMax?: number;
 }) {
-  const [hover, setHover] = useState<number | null>(null);
-  const top = Math.max(goal ?? 0, ...refLines.map((r) => r.value), ...items.map((i) => Math.max(i.value, i.marker ?? 0)));
-  const max = yMax ?? niceMax(top * 1.08);
-  const min = yMin ?? 0;
+  const [ref, { width: w }] = useSize<HTMLDivElement>();
   const padL = 40;
   const padB = 22;
   const padT = 8;
-  return (
-    <Frame height={height}>
-      {(w) => {
-        const plotW = w - padL;
-        const plotH = height - padB - padT;
-        const bw = plotW / Math.max(items.length, 1);
-        const y = (v: number) => padT + plotH - ((Math.max(min, v) - min) / (max - min || 1)) * plotH;
-        const ticks = [min, (min + max) / 2, max];
-        const vf = valueFormat ?? format;
-        return (
-          <g>
-            {ticks.map((t) => (
-              <g key={t}>
-                <line x1={padL} x2={w} y1={y(t)} y2={y(t)} stroke="var(--chart-grid)" />
-                <text x={padL - 6} y={y(t) + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
-                  {format(t)}
-                </text>
-              </g>
-            ))}
-            {items.map((it, i) => {
-              const x = padL + i * bw + bw * 0.15;
-              const bwi = bw * 0.7;
-              const isSel = selected === it.key;
-              let acc = 0;
-              return (
-                <g
-                  key={it.key}
-                  onClick={() => onSelect?.(it.key)}
-                  onPointerEnter={() => setHover(i)}
-                  onPointerLeave={() => setHover((h) => (h === i ? null : h))}
-                  className={onSelect ? "cursor-pointer" : undefined}
-                >
-                  <rect x={padL + i * bw} y={padT} width={bw} height={plotH} fill={isSel ? "var(--accent)" : hover === i ? "color-mix(in oklch, var(--accent) 50%, transparent)" : "transparent"} rx={4} />
-                  {it.segments ? (
-                    it.segments.map((s, k) => {
-                      const top = y(acc + s.value);
-                      const h = y(acc) - top;
-                      acc += s.value;
-                      return <rect key={k} x={x} y={top} width={bwi} height={Math.max(0, h)} fill={s.color} />;
-                    })
-                  ) : (
-                    <rect
-                      x={x}
-                      y={y(it.value)}
-                      width={bwi}
-                      height={Math.max(it.value > (it.base ?? min) ? 2 : 0, y(it.base ?? min) - y(it.value))}
-                      rx={Math.min(3, bwi / 3)}
-                      fill={it.color ?? color}
-                      opacity={selected != null && !isSel ? 0.55 : 1}
-                    />
-                  )}
-                  {it.marker !== undefined && <circle cx={x + bwi / 2} cy={y(it.marker)} r={Math.max(2.5, Math.min(4.5, bwi / 3))} fill="var(--foreground)" stroke="var(--card)" strokeWidth={1.5} />}
-                  {showValues && bw >= 26 && it.value > 0 && (
-                    <text x={x + bwi / 2} y={y(it.value) - 4} textAnchor="middle" className="fill-foreground text-[10px] font-medium">
-                      {vf(it.value)}
-                    </text>
-                  )}
-                  {(i % labelEvery === 0 || isSel) && (
-                    <text x={padL + i * bw + bw / 2} y={height - 6} textAnchor="middle" className={cn("text-[10px]", isSel ? "fill-foreground font-semibold" : "fill-muted-foreground")}>
-                      {it.label}
-                    </text>
-                  )}
-                </g>
-              );
-            })}
-            {goal !== undefined && goal > 0 && (
-              <g>
-                <line x1={padL} x2={w} y1={y(goal)} y2={y(goal)} stroke="var(--goal)" strokeDasharray="5 4" strokeWidth={1.5} />
-                <text x={padL + 4} y={y(goal) - 4} className="text-[10px] font-medium" fill="var(--goal)">
-                  Obiettivo
-                </text>
-              </g>
-            )}
-            {refLines.map((r) => (
-              <g key={r.value + (r.label ?? "")}>
-                <line x1={padL} x2={w} y1={y(r.value)} y2={y(r.value)} stroke={r.color} strokeDasharray="5 4" strokeWidth={1.25} />
-                {r.label && (
-                  <text x={padL + 4} y={y(r.value) - 4} className="text-[10px] font-medium" fill={r.color}>
-                    {r.label}
+  const plotW = Math.max(1, w - padL);
+  const plotH = height - padB - padT;
+  const bw = plotW / Math.max(items.length, 1);
+  const indexAt = (px: number) => {
+    const i = Math.floor((px - padL) / bw);
+    return i >= 0 && i < items.length ? i : null;
+  };
+  const ix = useChartInteraction({
+    ref,
+    from: 0,
+    to: items.length,
+    plotLeft: padL,
+    plotWidth: plotW,
+    onTap: (px) => {
+      const i = indexAt(px);
+      if (i !== null) onSelect?.(items[i].key);
+    },
+  });
+
+  const top = Math.max(goal ?? 0, ...refLines.map((r) => r.value), ...items.map((i) => Math.max(i.value, i.marker ?? 0)));
+  const max = yMax ?? niceMax(top * 1.08);
+  const min = yMin ?? 0;
+  const y = (v: number) => padT + plotH - ((Math.max(min, v) - min) / (max - min || 1)) * plotH;
+  const vf = valueFormat ?? format;
+
+  const grid = useMemo(
+    () =>
+      w > 0 &&
+      [min, (min + max) / 2, max].map((t) => (
+        <g key={t}>
+          <line x1={padL} x2={w} y1={y(t)} y2={y(t)} stroke="var(--chart-grid)" />
+          <text x={padL - 6} y={y(t) + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
+            {format(t)}
+          </text>
+        </g>
+      )),
+    [w, min, max, plotH, format], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const bars = useMemo(
+    () =>
+      w > 0 && (
+        <g>
+          {items.map((it, i) => {
+            const x = padL + i * bw + bw * 0.15;
+            const bwi = bw * 0.7;
+            const isSel = selected === it.key;
+            let acc = 0;
+            return (
+              <g key={it.key}>
+                {isSel && <rect x={padL + i * bw} y={padT} width={bw} height={plotH} fill="var(--accent)" rx={4} />}
+                {it.segments ? (
+                  it.segments.map((s, k) => {
+                    const top = y(acc + s.value);
+                    const h = y(acc) - top;
+                    acc += s.value;
+                    return <rect key={k} x={x} y={top} width={bwi} height={Math.max(0, h)} fill={s.color} />;
+                  })
+                ) : (
+                  <rect
+                    x={x}
+                    y={y(it.value)}
+                    width={bwi}
+                    height={Math.max(it.value > (it.base ?? min) ? 2 : 0, y(it.base ?? min) - y(it.value))}
+                    rx={Math.min(3, bwi / 3)}
+                    fill={it.color ?? color}
+                    opacity={selected != null && !isSel ? 0.55 : 1}
+                  />
+                )}
+                {it.marker !== undefined && <circle cx={x + bwi / 2} cy={y(it.marker)} r={Math.max(2.5, Math.min(4.5, bwi / 3))} fill="var(--foreground)" stroke="var(--card)" strokeWidth={1.5} />}
+                {showValues && bw >= 26 && it.value > 0 && (
+                  <text x={x + bwi / 2} y={y(it.value) - 4} textAnchor="middle" className="fill-foreground text-[10px] font-medium">
+                    {vf(it.value)}
+                  </text>
+                )}
+                {(i % labelEvery === 0 || isSel) && (
+                  <text x={padL + i * bw + bw / 2} y={height - 6} textAnchor="middle" className={cn("text-[10px]", isSel ? "fill-foreground font-semibold" : "fill-muted-foreground")}>
+                    {it.label}
                   </text>
                 )}
               </g>
-            ))}
-            {hover !== null && items[hover] && (
-              <g pointerEvents="none" transform={`translate(${Math.min(Math.max(padL + hover * bw + bw / 2 - 55, padL), w - 110)},${padT})`}>
-                <rect width={110} height={36} rx={6} fill="var(--popover)" stroke="var(--border)" />
-                <text x={8} y={14} className="fill-muted-foreground text-[10px]">
-                  {items[hover].label}
+            );
+          })}
+          {goal !== undefined && goal > 0 && (
+            <g>
+              <line x1={padL} x2={w} y1={y(goal)} y2={y(goal)} stroke="var(--goal)" strokeDasharray="5 4" strokeWidth={1.5} />
+              <text x={padL + 4} y={y(goal) - 4} className="text-[10px] font-medium" fill="var(--goal)">
+                Obiettivo
+              </text>
+            </g>
+          )}
+          {refLines.map((r) => (
+            <g key={r.value + (r.label ?? "")}>
+              <line x1={padL} x2={w} y1={y(r.value)} y2={y(r.value)} stroke={r.color} strokeDasharray="5 4" strokeWidth={1.25} />
+              {r.label && (
+                <text x={padL + 4} y={y(r.value) - 4} className="text-[10px] font-medium" fill={r.color}>
+                  {r.label}
                 </text>
-                <text x={8} y={29} className="fill-foreground text-[11px] font-semibold">
-                  {items[hover].base !== undefined ? `${vf(items[hover].base!)} – ${vf(items[hover].value)}` : vf(items[hover].value)}
-                </text>
-              </g>
-            )}
-          </g>
-        );
-      }}
-    </Frame>
+              )}
+            </g>
+          ))}
+        </g>
+      ),
+    [items, w, min, max, plotH, height, selected, showValues, labelEvery, goal, refLines, color, vf], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const hover = ix.hoverX !== null ? indexAt(ix.hoverX) : null;
+  const hit = hover !== null ? items[hover] : null;
+  return (
+    <Surface boxRef={ref} ix={ix} width={w} height={height} cursor={onSelect ? "cursor-pointer" : undefined}>
+      {grid}
+      {hover !== null && <rect x={padL + hover * bw} y={padT} width={bw} height={plotH} fill="color-mix(in oklch, var(--accent) 60%, transparent)" rx={4} pointerEvents="none" />}
+      {bars}
+      {hit && (
+        <Tooltip
+          x={padL + hover! * bw + bw / 2}
+          width={w}
+          plotLeft={padL}
+          top={padT}
+          title={hit.label}
+          lines={[{ text: hit.base !== undefined ? `${vf(hit.base)} – ${vf(hit.value)}` : vf(hit.value) }]}
+        />
+      )}
+    </Surface>
   );
 }
 
@@ -228,6 +377,30 @@ export interface Band {
   color: string;
 }
 
+function seriesPaths(s: Series, pts: TimeValue[], x: (t: number) => number, y: (v: number) => number, base: number) {
+  let d = "";
+  let area = "";
+  let segStart: number | null = null;
+  let prev: TimeValue | null = null;
+  const P = (t: number, v: number) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`;
+  for (const p of pts) {
+    const brk = !prev || (s.gap !== undefined && p.timestamp - prev.timestamp > s.gap);
+    if (s.kind === "step" && prev && !brk) {
+      d += `L${P(p.timestamp, prev.value)}`;
+      if (s.area) area += `L${P(p.timestamp, prev.value)}`;
+    }
+    if (brk) {
+      if (prev && segStart !== null && s.area) area += `L${P(prev.timestamp, base)}L${segStart.toFixed(1)},${y(base).toFixed(1)}Z`;
+      d += `M${P(p.timestamp, p.value)}`;
+      segStart = x(p.timestamp);
+    } else d += `L${P(p.timestamp, p.value)}`;
+    if (s.area) area += `${brk ? "M" : "L"}${P(p.timestamp, p.value)}`;
+    prev = p;
+  }
+  if (s.area && prev && segStart !== null) area += `L${P(prev.timestamp, base)}L${segStart.toFixed(1)},${y(base).toFixed(1)}Z`;
+  return { d, area };
+}
+
 export function TimeChart({
   series,
   from,
@@ -251,143 +424,155 @@ export function TimeChart({
   xTicks?: "hours" | "days";
   refLines?: RefLine[];
 }) {
-  const [hover, setHover] = useState<number | null>(null);
-  const all = series.flatMap((s) => s.points.map((p) => p.value));
-  const lo = yMin ?? (all.length ? niceFloor(Math.min(...all) * 0.95) : 0);
-  const hi = yMax ?? (all.length ? niceCeil(Math.max(...all) * 1.05) : 100);
+  const [ref, { width: w }] = useSize<HTMLDivElement>();
   const padL = 36;
+  const padR = 4;
   const padB = 20;
   const padT = 8;
-  const ticks = useMemo(() => {
-    const out: number[] = [];
-    if (xTicks === "hours") {
-      const span = to - from;
-      const step = span <= 6 * 3600 ? 3600 : span <= 13 * 3600 ? 2 * 3600 : 6 * 3600;
-      const d = new Date(from * 1000);
-      d.setMinutes(0, 0, 0);
-      for (let t = d.getTime() / 1000; t <= to; t += 3600) {
-        if (t >= from && new Date(t * 1000).getHours() % (step / 3600) === 0) out.push(t);
-      }
-    } else {
-      for (let t = from; t <= to; t += 86400) out.push(t);
-    }
-    return out;
-  }, [from, to, xTicks]);
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = height - padB - padT;
+  // a month of daily points: zoom down to ~3 days at most
+  const maxZoom = xTicks === "days" ? Math.max(1, (to - from) / (3 * 86400)) : 32;
+  const ix = useChartInteraction({ ref, from, to, plotLeft: padL, plotWidth: plotW, zoomable: maxZoom > 1.5, maxZoom });
+  const { from: vf, to: vt } = ix.view;
+  const clip = useClipId();
 
-  return (
-    <Frame height={height}>
-      {(w) => {
-        const plotW = w - padL - 4;
-        const plotH = height - padB - padT;
-        const x = (t: number) => padL + ((t - from) / (to - from)) * plotW;
-        const y = (v: number) => padT + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
-        const paths = series.map((s) => {
-          let d = "";
-          let area = "";
-          let segStart: number | null = null;
-          let prev: TimeValue | null = null;
-          for (const p of s.points) {
-            const brk = !prev || (s.gap !== undefined && p.timestamp - prev.timestamp > s.gap);
-            if (s.kind === "step" && prev && !brk) {
-              d += `L${x(p.timestamp)},${y(prev.value)}`;
-              if (s.area) area += `L${x(p.timestamp)},${y(prev.value)}`;
-            }
-            if (brk) {
-              if (prev && segStart !== null && s.area) area += `L${x(prev.timestamp)},${y(lo)}L${segStart},${y(lo)}Z`;
-              d += `M${x(p.timestamp)},${y(p.value)}`;
-              segStart = x(p.timestamp);
-            } else d += `L${x(p.timestamp)},${y(p.value)}`;
-            if (s.area) area += `${brk ? "M" : "L"}${x(p.timestamp)},${y(p.value)}`;
-            prev = p;
-          }
-          if (s.area && prev && segStart !== null) area += `L${x(prev.timestamp)},${y(lo)}L${segStart},${y(lo)}Z`;
-          return { d, area };
-        });
-        const hoverT = hover !== null ? from + ((hover - padL) / plotW) * (to - from) : null;
-        const hoverVals =
-          hoverT !== null
-            ? series.map((s) => {
-                let best: TimeValue | null = null;
-                if (s.kind === "step") {
-                  for (const p of s.points) if (p.timestamp <= hoverT) best = p;
-                  return best && hoverT <= (s.points[s.points.length - 1]?.timestamp ?? 0) + 60 ? { timestamp: hoverT, value: best.value } : null;
-                }
-                for (const p of s.points) if (!best || Math.abs(p.timestamp - hoverT) < Math.abs(best.timestamp - hoverT)) best = p;
-                return best && Math.abs(best.timestamp - hoverT) < (to - from) / 40 ? best : null;
-              })
-            : [];
-        return (
-          <g
-            onPointerMove={(e) => setHover(e.nativeEvent.offsetX)}
-            onPointerDown={(e) => setHover(e.nativeEvent.offsetX)}
-            onPointerLeave={() => setHover(null)}
-          >
-            <rect x={0} y={0} width={w} height={height} fill="transparent" />
-            {bands.map((b, i) => (
-              <rect key={i} x={x(Math.max(b.start, from))} y={padT} width={Math.max(0, x(Math.min(b.end, to)) - x(Math.max(b.start, from)))} height={plotH} fill={b.color} />
-            ))}
-            {[lo, (lo + hi) / 2, hi].map((t) => (
-              <g key={t}>
-                <line x1={padL} x2={w} y1={y(t)} y2={y(t)} stroke="var(--chart-grid)" />
-                <text x={padL - 6} y={y(t) + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
-                  {format(t)}
-                </text>
-              </g>
-            ))}
-            {refLines.map((r) => (
-              <g key={r.value + (r.label ?? "")}>
-                <line x1={padL} x2={w} y1={y(r.value)} y2={y(r.value)} stroke={r.color} strokeDasharray="5 4" strokeWidth={1.25} />
-                {r.label && (
-                  <text x={padL + 4} y={y(r.value) - 4} className="text-[10px] font-medium" fill={r.color}>
-                    {r.label}
-                  </text>
-                )}
-              </g>
-            ))}
-            {ticks.map((t) => (
-              <text key={t} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
-                {xTicks === "hours" ? (w > 480 ? fmtTime(t) : `${new Date(t * 1000).getHours()}`) : new Date(t * 1000).getDate()}
+  const [lo, hi] = useMemo(() => {
+    let mn = Infinity;
+    let mx = -Infinity;
+    for (const s of series)
+      for (const p of s.points) {
+        if (p.value < mn) mn = p.value;
+        if (p.value > mx) mx = p.value;
+      }
+    const has = mn <= mx;
+    return [yMin ?? (has ? niceFloor(mn * 0.95) : 0), yMax ?? (has ? niceCeil(mx * 1.05) : 100)];
+  }, [series, yMin, yMax]);
+
+  const x = (t: number) => padL + ((t - vf) / (vt - vf || 1)) * plotW;
+  const y = (v: number) => padT + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
+
+  const background = useMemo(
+    () =>
+      w > 0 && (
+        <g clipPath={`url(#${clip})`}>
+          {bands.map((b, i) => (
+            <rect key={i} x={x(Math.max(b.start, vf))} y={padT} width={Math.max(0, x(Math.min(b.end, vt)) - x(Math.max(b.start, vf)))} height={plotH} fill={b.color} />
+          ))}
+        </g>
+      ),
+    [bands, w, vf, vt, plotH, clip], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const axes = useMemo(() => {
+    if (!w) return null;
+    const hours = xTicks === "hours" ? hourTicks(vf, vt, plotW, w > 480) : null;
+    const ticks = hours ? hours.ticks : dayTicks(from, to, { from: vf, to: vt }, plotW);
+    return (
+      <g>
+        {[lo, (lo + hi) / 2, hi].map((t) => (
+          <g key={t}>
+            <line x1={padL} x2={w} y1={y(t)} y2={y(t)} stroke="var(--chart-grid)" />
+            <text x={padL - 6} y={y(t) + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
+              {format(t)}
+            </text>
+          </g>
+        ))}
+        {refLines.map((r) => (
+          <g key={r.value + (r.label ?? "")}>
+            <line x1={padL} x2={w} y1={y(r.value)} y2={y(r.value)} stroke={r.color} strokeDasharray="5 4" strokeWidth={1.25} />
+            {r.label && (
+              <text x={padL + 4} y={y(r.value) - 4} className="text-[10px] font-medium" fill={r.color}>
+                {r.label}
               </text>
-            ))}
-            {series.map((s, i) =>
-              s.kind === "bars" ? (
-                <g key={i}>
-                  {s.points.map((p, k) => {
-                    const next = s.points[k + 1];
-                    const span = Math.min(next ? next.timestamp - p.timestamp : 180, s.gap ?? 300);
-                    const bw = Math.max(1, x(p.timestamp + span) - x(p.timestamp) - 0.5);
-                    return <rect key={p.timestamp} x={x(p.timestamp)} y={y(p.value)} width={bw} height={Math.max(0, y(lo) - y(p.value))} fill={s.colorOf?.(p.value) ?? s.color} />;
-                  })}
-                </g>
-              ) : (
-              <g key={i}>
-                {s.area && <path d={paths[i].area} fill={s.color} opacity={0.18} />}
-                <path d={paths[i].d} fill="none" stroke={s.color} strokeWidth={s.width ?? 1.75} strokeLinejoin="round" strokeLinecap="round" />
-                {s.dots && s.points.map((p) => <circle key={p.timestamp} cx={x(p.timestamp)} cy={y(p.value)} r={2.5} fill={s.color} />)}
-              </g>
-              ),
-            )}
-            {hoverT !== null && hoverVals.some(Boolean) && (
-              <g pointerEvents="none">
-                <line x1={hover!} x2={hover!} y1={padT} y2={padT + plotH} stroke="var(--muted-foreground)" strokeOpacity={0.5} />
-                {hoverVals.map((p, i) => p && <circle key={i} cx={x(p.timestamp)} cy={y(p.value)} r={4} fill={series[i].color} stroke="var(--card)" strokeWidth={2} />)}
-                <g transform={`translate(${Math.min(Math.max(hover! - 50, padL), w - 104)},${padT})`}>
-                  <rect width={104} height={18 + 14 * hoverVals.filter(Boolean).length} rx={6} fill="var(--popover)" stroke="var(--border)" />
-                  <text x={8} y={13} className="fill-muted-foreground text-[10px]">
-                    {xTicks === "hours" ? fmtTime(hoverVals.find(Boolean)!.timestamp) : new Date(hoverVals.find(Boolean)!.timestamp * 1000).toLocaleDateString("it-IT", { day: "numeric", month: "short" })}
-                  </text>
-                  {hoverVals.filter(Boolean).map((p, i) => (
-                    <text key={i} x={8} y={27 + i * 14} className="fill-foreground text-[11px] font-semibold">
-                      {format(p!.value)} {series[hoverVals.indexOf(p)].label ?? ""}
-                    </text>
-                  ))}
-                </g>
-              </g>
             )}
           </g>
-        );
-      }}
-    </Frame>
+        ))}
+        {ticks.map((t) => (
+          <text key={t} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
+            {hours ? hours.label(t) : new Date(t * 1000).getDate()}
+          </text>
+        ))}
+      </g>
+    );
+  }, [w, vf, vt, from, to, lo, hi, plotH, height, xTicks, refLines, format]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const data = useMemo(() => {
+    if (!w) return null;
+    return (
+      <g clipPath={`url(#${clip})`}>
+        {series.map((s, i) => {
+          const pts = visibleSlice(s.points, vf, vt);
+          if (s.kind === "bars")
+            return (
+              <g key={i}>
+                {pts.map((p, k) => {
+                  const next = pts[k + 1];
+                  const span = Math.min(next ? next.timestamp - p.timestamp : 180, s.gap ?? 300);
+                  const bw = Math.max(1, x(p.timestamp + span) - x(p.timestamp) - 0.5);
+                  return <rect key={p.timestamp} x={x(p.timestamp)} y={y(p.value)} width={bw} height={Math.max(0, y(lo) - y(p.value))} fill={s.colorOf?.(p.value) ?? s.color} />;
+                })}
+              </g>
+            );
+          const { d, area } = seriesPaths(s, pts, x, y, lo);
+          return (
+            <g key={i}>
+              {s.area && <path d={area} fill={s.color} opacity={0.18} />}
+              <path d={d} fill="none" stroke={s.color} strokeWidth={s.width ?? 1.75} strokeLinejoin="round" strokeLinecap="round" />
+              {s.dots && pts.map((p) => <circle key={p.timestamp} cx={x(p.timestamp)} cy={y(p.value)} r={2.5} fill={s.color} />)}
+            </g>
+          );
+        })}
+      </g>
+    );
+  }, [series, w, vf, vt, lo, hi, plotH, clip]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  let hover: ReactNode = null;
+  if (ix.hoverX !== null && w > 0) {
+    const t = vf + ((clamp(ix.hoverX, padL, padL + plotW) - padL) / plotW) * (vt - vf);
+    const tol = (vt - vf) / 40;
+    const vals = series.map((s) => {
+      if (s.kind === "step") {
+        const p = pointAtOrBefore(s.points, t);
+        const last = s.points[s.points.length - 1];
+        return p && t <= last.timestamp + 60 ? { timestamp: t, value: p.value } : null;
+      }
+      const p = nearestPoint(s.points, t);
+      return p && Math.abs(p.timestamp - t) < tol ? p : null;
+    });
+    const first = vals.find((v) => v !== null);
+    if (first) {
+      const lx = x(first.timestamp);
+      const many = vals.filter(Boolean).length > 1;
+      hover = (
+        <g pointerEvents="none">
+          <Cursor x={lx} top={padT} bottom={padT + plotH} />
+          {vals.map((p, i) => p && <circle key={i} cx={x(p.timestamp)} cy={y(p.value)} r={4} fill={series[i].colorOf?.(p.value) ?? series[i].color} stroke="var(--card)" strokeWidth={2} />)}
+          <Tooltip
+            x={lx}
+            width={w}
+            plotLeft={padL}
+            top={padT}
+            title={xTicks === "hours" ? fmtTime(first.timestamp) : fmtShortDate(first.timestamp)}
+            lines={vals.flatMap((p, i) => (p ? [{ text: `${format(p.value)} ${series[i].label ?? ""}`.trim(), color: many ? series[i].color : undefined }] : []))}
+          />
+        </g>
+      );
+    }
+  }
+
+  return (
+    <Surface boxRef={ref} ix={ix} width={w} height={height} rangeLabel={xTicks === "hours" ? hoursLabel : (v) => `${fmtShortDate(v.from)} – ${fmtShortDate(v.to)}`}>
+      <defs>
+        <clipPath id={clip}>
+          <rect x={padL} y={0} width={plotW} height={height} />
+        </clipPath>
+      </defs>
+      {background}
+      {axes}
+      {data}
+      {hover}
+    </Surface>
   );
 }
 
@@ -404,75 +589,120 @@ export interface Overlay {
 
 /** Sleep stages in rows (Sveglio, REM, Leggero, Profondo) with an optional line on top (heart rate, SpO2, breathing). */
 export function Hypnogram({ segments, from, to, height = 170, overlay }: { segments: SleepSegment[]; from: number; to: number; height?: number; overlay?: Overlay | null }) {
+  const [ref, { width: w }] = useSize<HTMLDivElement>();
   const padL = 62;
   const padR = overlay ? 34 : 4;
   const padB = 20;
-  const vals = overlay?.points.map((p) => p.value) ?? [];
-  const oLo = vals.length ? niceFloor(Math.min(...vals) * 0.95) : 0;
-  const oHi = vals.length ? niceCeil(Math.max(...vals) * 1.05) : 1;
-  return (
-    <Frame height={height}>
-      {(w) => {
-        const plotW = w - padL - padR;
-        const plotH = height - padB;
-        const rowH = plotH / 4;
-        const x = (t: number) => padL + ((t - from) / (to - from || 1)) * plotW;
-        const yO = (v: number) => 4 + (plotH - 8) - ((v - oLo) / (oHi - oLo || 1)) * (plotH - 8);
-        const hours: number[] = [];
-        const d = new Date(from * 1000);
-        d.setMinutes(0, 0, 0);
-        for (let t = d.getTime() / 1000 + 3600; t < to; t += 3600) hours.push(t);
-        let path = "";
-        let prev: number | null = null;
-        for (const p of overlay?.points ?? []) {
-          path += `${prev === null || p.timestamp - prev > 900 ? "M" : "L"}${x(p.timestamp).toFixed(1)},${yO(p.value).toFixed(1)}`;
-          prev = p.timestamp;
-        }
-        return (
-          <g>
-            {[1, 4, 2, 3].map((st) => (
-              <g key={st}>
-                <rect x={padL} y={STAGE_ROW[st] * rowH} width={plotW} height={rowH} fill={st % 2 ? "transparent" : "var(--chart-grid)"} opacity={0.5} />
-                <text x={padL - 8} y={STAGE_ROW[st] * rowH + rowH / 2 + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
-                  {STAGE_LABEL[st]}
-                </text>
-              </g>
-            ))}
-            {segments.map((s, i) => (
-              <rect
-                key={i}
-                x={x(s.start)}
-                y={STAGE_ROW[s.stage] * rowH + 3}
-                width={Math.max(1, x(s.end) - x(s.start))}
-                height={rowH - 6}
-                rx={2}
-                fill={STAGE_COLOR[s.stage]}
-                opacity={overlay ? 0.75 : 1}
-              >
-                <title>{`${STAGE_LABEL[s.stage]} ${fmtTime(s.start)}–${fmtTime(s.end)}`}</title>
-              </rect>
-            ))}
-            {overlay && (
-              <g>
-                <path d={path} fill="none" stroke={overlay.color} strokeWidth={1.5} strokeLinejoin="round" />
-                {[oLo, oHi].map((v) => (
-                  <text key={v} x={w - 2} y={yO(v) + 4} textAnchor="end" className="text-[10px]" fill={overlay.color}>
-                    {Math.round(v)}
-                  </text>
-                ))}
-              </g>
-            )}
-            {hours
-              .filter((_, i) => hours.length < 10 || i % 2 === 0)
-              .map((t) => (
-                <text key={t} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
-                  {w > 480 ? fmtTime(t) : new Date(t * 1000).getHours()}
-                </text>
-              ))}
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = height - padB;
+  const rowH = plotH / 4;
+  const ix = useChartInteraction({ ref, from, to, plotLeft: padL, plotWidth: plotW, zoomable: true });
+  const { from: vf, to: vt } = ix.view;
+  const clip = useClipId();
+
+  const [oLo, oHi] = useMemo(() => {
+    let mn = Infinity;
+    let mx = -Infinity;
+    for (const p of overlay?.points ?? []) {
+      if (p.value < mn) mn = p.value;
+      if (p.value > mx) mx = p.value;
+    }
+    return mn <= mx ? [niceFloor(mn * 0.95), niceCeil(mx * 1.05)] : [0, 1];
+  }, [overlay]);
+
+  const x = (t: number) => padL + ((t - vf) / (vt - vf || 1)) * plotW;
+  const yO = (v: number) => 4 + (plotH - 8) - ((v - oLo) / (oHi - oLo || 1)) * (plotH - 8);
+
+  const axes = useMemo(() => {
+    if (!w) return null;
+    const { ticks, label } = hourTicks(vf, vt, plotW, w > 480);
+    return (
+      <g>
+        {[1, 4, 2, 3].map((st) => (
+          <g key={st}>
+            <rect x={padL} y={STAGE_ROW[st] * rowH} width={plotW} height={rowH} fill={st % 2 ? "transparent" : "var(--chart-grid)"} opacity={0.5} />
+            <text x={padL - 8} y={STAGE_ROW[st] * rowH + rowH / 2 + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
+              {STAGE_LABEL[st]}
+            </text>
           </g>
-        );
-      }}
-    </Frame>
+        ))}
+        {overlay &&
+          [oLo, oHi].map((v) => (
+            <text key={v} x={w - 2} y={yO(v) + 4} textAnchor="end" className="text-[10px]" fill={overlay.color}>
+              {Math.round(v)}
+            </text>
+          ))}
+        {ticks
+          .filter((t) => x(t) >= padL + 10)
+          .map((t) => (
+            <text key={t} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
+              {label(t)}
+            </text>
+          ))}
+      </g>
+    );
+  }, [w, vf, vt, padR, height, overlay, oLo, oHi]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const data = useMemo(() => {
+    if (!w) return null;
+    let path = "";
+    let prev: number | null = null;
+    for (const p of visibleSlice(overlay?.points ?? [], vf, vt)) {
+      path += `${prev === null || p.timestamp - prev > 900 ? "M" : "L"}${x(p.timestamp).toFixed(1)},${yO(p.value).toFixed(1)}`;
+      prev = p.timestamp;
+    }
+    return (
+      <g clipPath={`url(#${clip})`}>
+        {segments
+          .filter((s) => s.end >= vf && s.start <= vt)
+          .map((s) => (
+            <rect
+              key={`${s.start}:${s.end}`}
+              x={x(s.start)}
+              y={STAGE_ROW[s.stage] * rowH + 3}
+              width={Math.max(1, x(s.end) - x(s.start))}
+              height={rowH - 6}
+              rx={2}
+              fill={STAGE_COLOR[s.stage]}
+              opacity={overlay ? 0.75 : 1}
+            />
+          ))}
+        {overlay && <path d={path} fill="none" stroke={overlay.color} strokeWidth={1.5} strokeLinejoin="round" />}
+      </g>
+    );
+  }, [segments, overlay, w, vf, vt, padR, height, oLo, oHi, clip]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  let hover: ReactNode = null;
+  if (ix.hoverX !== null && w > 0) {
+    const hx = clamp(ix.hoverX, padL, padL + plotW);
+    const t = vf + ((hx - padL) / plotW) * (vt - vf);
+    const seg = segments.find((s) => t >= s.start && t < s.end);
+    const near = overlay ? nearestPoint(overlay.points, t) : null;
+    const ov = near && Math.abs(near.timestamp - t) <= 900 ? near : null;
+    const lines: TipLine[] = [];
+    if (seg) lines.push({ text: `${STAGE_LABEL[seg.stage]} ${fmtTime(seg.start)}–${fmtTime(seg.end)}`, color: STAGE_COLOR[seg.stage] });
+    if (ov && overlay) lines.push({ text: `${fmt1(ov.value)} ${overlay.unit}`, color: overlay.color });
+    if (lines.length)
+      hover = (
+        <g pointerEvents="none">
+          <Cursor x={hx} top={0} bottom={plotH} />
+          {ov && overlay && <circle cx={x(ov.timestamp)} cy={yO(ov.value)} r={4} fill={overlay.color} stroke="var(--card)" strokeWidth={2} />}
+          <Tooltip x={hx} width={w} plotLeft={padL} top={2} title={fmtTime(t)} lines={lines} />
+        </g>
+      );
+  }
+
+  return (
+    <Surface boxRef={ref} ix={ix} width={w} height={height} rangeLabel={hoursLabel}>
+      <defs>
+        <clipPath id={clip}>
+          <rect x={padL} y={0} width={plotW} height={height} />
+        </clipPath>
+      </defs>
+      {axes}
+      {data}
+      {hover}
+    </Surface>
   );
 }
 
@@ -483,54 +713,100 @@ export interface MinuteSlot {
   /** "activity" intensity 0..1 */
   level: number;
   color: string;
+  /** shown in the tooltip */
+  label?: string;
 }
 
 export function ActivitySleepChart({ slots, hr, from, to, height = 190 }: { slots: MinuteSlot[]; hr: TimeValue[]; from: number; to: number; height?: number }) {
+  const [ref, { width: w }] = useSize<HTMLDivElement>();
   const padL = 30;
   const padR = 30;
   const padB = 20;
-  const hrMax = Math.max(120, ...hr.map((h) => h.value));
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = height - padB - 6;
+  const ix = useChartInteraction({ ref, from, to, plotLeft: padL, plotWidth: plotW, zoomable: true });
+  const { from: vf, to: vt } = ix.view;
+  const clip = useClipId();
+  const hrMax = useMemo(() => hr.reduce((m, h) => Math.max(m, h.value), 120), [hr]);
   const hrMin = 40;
+
+  const x = (t: number) => padL + ((t - vf) / (vt - vf || 1)) * plotW;
+  const yHr = (v: number) => 6 + plotH - ((v - hrMin) / (hrMax - hrMin)) * plotH;
+
+  const axes = useMemo(() => {
+    if (!w) return null;
+    const { ticks, label } = hourTicks(vf, vt, plotW, w > 480);
+    return (
+      <g>
+        {[0, 0.5, 1].map((f) => (
+          <line key={f} x1={padL} x2={padL + plotW} y1={6 + plotH * f} y2={6 + plotH * f} stroke="var(--chart-grid)" />
+        ))}
+        {[hrMin, Math.round((hrMin + hrMax) / 2), hrMax].map((v) => (
+          <text key={v} x={padL + plotW + 4} y={yHr(v) + 4} className="fill-heart text-[10px]">
+            {v}
+          </text>
+        ))}
+        {ticks.map((t) => (
+          <text key={t} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
+            {label(t)}
+          </text>
+        ))}
+      </g>
+    );
+  }, [w, vf, vt, height, hrMax]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const data = useMemo(() => {
+    if (!w) return null;
+    const slotW = Math.max(1, plotW / ((vt - vf) / 300));
+    let d = "";
+    let prev: number | null = null;
+    for (const p of visibleSlice(hr, vf, vt)) {
+      d += `${prev === null || p.timestamp - prev > 1800 ? "M" : "L"}${x(p.timestamp).toFixed(1)},${yHr(p.value).toFixed(1)}`;
+      prev = p.timestamp;
+    }
+    return (
+      <g clipPath={`url(#${clip})`}>
+        {slots
+          .filter((s) => s.t + 300 >= vf && s.t <= vt)
+          .map((s) => (
+            <rect key={s.t} x={x(s.t)} y={6 + plotH * (1 - s.level)} width={slotW + 0.3} height={plotH * s.level} fill={s.color} />
+          ))}
+        <path d={d} fill="none" stroke="var(--heart)" strokeWidth={1.4} strokeLinejoin="round" />
+      </g>
+    );
+  }, [slots, hr, w, vf, vt, height, hrMax, clip]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  let hover: ReactNode = null;
+  if (ix.hoverX !== null && w > 0) {
+    const hx = clamp(ix.hoverX, padL, padL + plotW);
+    const t = vf + ((hx - padL) / plotW) * (vt - vf);
+    const slot = slots.find((s) => t >= s.t && t < s.t + 300);
+    const near = nearestPoint(hr, t);
+    const h = near && Math.abs(near.timestamp - t) <= 600 ? near : null;
+    const lines: TipLine[] = [];
+    if (slot?.label) lines.push({ text: slot.label, color: slot.color });
+    if (h) lines.push({ text: `${fmtInt(h.value)} bpm`, color: "var(--heart)" });
+    if (lines.length)
+      hover = (
+        <g pointerEvents="none">
+          <Cursor x={hx} top={6} bottom={6 + plotH} />
+          {h && <circle cx={x(h.timestamp)} cy={yHr(h.value)} r={4} fill="var(--heart)" stroke="var(--card)" strokeWidth={2} />}
+          <Tooltip x={hx} width={w} plotLeft={padL} top={6} title={slot ? `${fmtTime(slot.t)}–${fmtTime(slot.t + 300)}` : fmtTime(t)} lines={lines} />
+        </g>
+      );
+  }
+
   return (
-    <Frame height={height}>
-      {(w) => {
-        const plotW = w - padL - padR;
-        const plotH = height - padB - 6;
-        const x = (t: number) => padL + ((t - from) / (to - from)) * plotW;
-        const slotW = Math.max(1, plotW / ((to - from) / 300));
-        const yHr = (v: number) => 6 + plotH - ((v - hrMin) / (hrMax - hrMin)) * plotH;
-        let d = "";
-        let prev: number | null = null;
-        for (const p of hr) {
-          d += `${prev === null || p.timestamp - prev > 1800 ? "M" : "L"}${x(p.timestamp)},${yHr(p.value)}`;
-          prev = p.timestamp;
-        }
-        return (
-          <g>
-            {[0, 0.5, 1].map((f) => (
-              <line key={f} x1={padL} x2={padL + plotW} y1={6 + plotH * f} y2={6 + plotH * f} stroke="var(--chart-grid)" />
-            ))}
-            {slots.map((s) => (
-              <rect key={s.t} x={x(s.t)} y={6 + plotH * (1 - s.level)} width={slotW + 0.3} height={plotH * s.level} fill={s.color} />
-            ))}
-            <path d={d} fill="none" stroke="var(--heart)" strokeWidth={1.4} strokeLinejoin="round" />
-            {[hrMin, Math.round((hrMin + hrMax) / 2), hrMax].map((v) => (
-              <text key={v} x={padL + plotW + 4} y={yHr(v) + 4} className="fill-heart text-[10px]">
-                {v}
-              </text>
-            ))}
-            {[0, 3, 6, 9, 12, 15, 18, 21].map((h) => {
-              const t = from + h * 3600;
-              return (
-                <text key={h} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
-                  {h}
-                </text>
-              );
-            })}
-          </g>
-        );
-      }}
-    </Frame>
+    <Surface boxRef={ref} ix={ix} width={w} height={height} rangeLabel={hoursLabel}>
+      <defs>
+        <clipPath id={clip}>
+          <rect x={padL} y={0} width={plotW} height={height} />
+        </clipPath>
+      </defs>
+      {axes}
+      {data}
+      {hover}
+    </Surface>
   );
 }
 

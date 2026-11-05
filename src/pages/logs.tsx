@@ -1,6 +1,6 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { CopyIcon, DownloadIcon, FileJsonIcon, Trash2Icon } from "lucide-react";
-import { useApp } from "@/app-context";
+import { useApp, useLive } from "@/app-context";
 import { PageBody, PageHeader } from "@/components/page";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,8 @@ function save(name: string, text: string, type = "text/plain") {
 
 /** Summary of the last sync and of what is in the database: the first thing to look at when charts stay empty. */
 function Diagnostics() {
-  const { db, devices, manager, live, dbInfo } = useApp();
+  const { db, devices, manager, dbInfo } = useApp();
+  const live = useLive();
   const { data: counts } = useQuery(() => tableCounts(db), []);
   const { data: files } = useQuery(() => listFitFiles(db), []);
   const reports = manager.allReports();

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ChartColumnIcon, HouseIcon, ScrollTextIcon, SettingsIcon, TimerIcon, WatchIcon } from "lucide-react";
-import { useApp } from "@/app-context";
+import { useApp, useLive } from "@/app-context";
 import { navigate, usePath } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
@@ -16,7 +16,8 @@ const isActive = (path: string, to: string) => (to === "/" ? path === "/" : path
 
 export function AppShell({ children }: { children: ReactNode }) {
   const path = usePath();
-  const { devices, live, dbInfo } = useApp();
+  const { devices, dbInfo } = useApp();
+  const live = useLive();
   const connected = devices.filter((d) => {
     const s = live.get(d.id)?.state;
     return s && s !== "idle" && s !== "disconnected";
