@@ -490,11 +490,36 @@ export interface WorkoutRecord {
   altitude: number | null;
   speed: number | null;
   distance: number | null;
+  /** as written by the band: revolutions or strides per minute (see workoutCadence) */
   cadence: number | null;
+  /** °C, only on bands with a temperature sensor */
+  temperature: number | null;
 }
 
 export async function workoutRecords(db: SqlExecutor, id: number): Promise<WorkoutRecord[]> {
   return db.all("SELECT * FROM workout_record WHERE workout_id = ? ORDER BY timestamp", [id]);
+}
+
+export interface WorkoutLap {
+  idx: number;
+  start_time: number;
+  elapsed_s: number | null;
+  timer_s: number | null;
+  distance_m: number | null;
+  calories: number | null;
+  avg_speed: number | null;
+  max_speed: number | null;
+  avg_hr: number | null;
+  max_hr: number | null;
+  avg_cadence: number | null;
+  max_cadence: number | null;
+  ascent_m: number | null;
+  descent_m: number | null;
+  lap_trigger: number | null;
+}
+
+export async function workoutLaps(db: SqlExecutor, id: number): Promise<WorkoutLap[]> {
+  return db.all("SELECT * FROM workout_lap WHERE workout_id = ? ORDER BY idx", [id]);
 }
 
 export async function deleteWorkout(db: SqlExecutor, id: number) {
@@ -507,7 +532,7 @@ export async function tableCounts(db: SqlExecutor): Promise<Record<string, numbe
   const tables = [
     "activity_sample", "stress_sample", "body_energy_sample", "spo2_sample", "respiratory_rate_sample", "resting_hr_sample",
     "sleep_stage_sample", "sleep_stats_sample", "hrv_summary_sample", "hrv_value_sample", "intensity_minutes_sample",
-    "workout", "workout_record", "fit_file",
+    "workout", "workout_record", "workout_lap", "fit_file",
   ];
   const out: Record<string, number> = {};
   for (const t of tables) out[t] = Number((await one<{ n: number }>(db, `SELECT COUNT(*) AS n FROM ${t}`))?.n ?? 0);

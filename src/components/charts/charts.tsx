@@ -12,7 +12,7 @@ import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSize } from "@/hooks/use-size";
 import { cn } from "@/lib/utils";
-import { fmt1, fmtInt, fmtTime } from "@/lib/format";
+import { fmt1, fmtDuration, fmtInt, fmtTime } from "@/lib/format";
 import type { SleepSegment, TimeValue } from "@/lib/db/repo";
 import { nearestPoint, pointAtOrBefore, useChartInteraction, visibleSlice, type ChartInteraction, type TimeWindow } from "./interaction";
 
@@ -171,6 +171,17 @@ function hourTicks(from: number, to: number, plotW: number, wide: boolean) {
   }
   const label = (t: number) => (step < 3600 || wide ? fmtTime(t) : String(new Date(t * 1000).getHours()));
   return { ticks, label };
+}
+
+const ELAPSED_STEPS = [10, 15, 30, 60, 120, 200, 300, 600, 900, 1200, 1800, 3600, 5400, 7200, 10800, 21600];
+
+/** ticks at round times since `origin` (an activity's start), as many as fit */
+function elapsedTicks(origin: number, view: TimeWindow, plotW: number) {
+  const maxLabels = Math.max(2, Math.floor(plotW / 48));
+  const step = ELAPSED_STEPS.find((s) => (view.to - view.from) / s <= maxLabels) ?? 21600;
+  const ticks: number[] = [];
+  for (let k = Math.ceil((view.from - origin) / step); origin + k * step <= view.to; k++) ticks.push(origin + k * step);
+  return ticks;
 }
 
 /** one tick per day of [from, to], thinned out to fit; only those inside the view */
@@ -431,7 +442,8 @@ export function TimeChart({
   yMax?: number;
   bands?: Band[];
   format?: (v: number) => string;
-  xTicks?: "hours" | "days";
+  /** "elapsed": time since `from` (activities) */
+  xTicks?: "hours" | "days" | "elapsed";
   refLines?: RefLine[];
 }) {
   const [ref, { width: w }] = useSize<HTMLDivElement>();
@@ -470,7 +482,7 @@ export function TimeChart({
   const axes = useMemo(() => {
     if (!w) return null;
     const hours = xTicks === "hours" ? hourTicks(vf, vt, plotW, w > 480) : null;
-    const ticks = hours ? hours.ticks : dayTicks(from, to, { from: vf, to: vt }, plotW);
+    const ticks = hours ? hours.ticks : xTicks === "elapsed" ? elapsedTicks(from, { from: vf, to: vt }, plotW) : dayTicks(from, to, { from: vf, to: vt }, plotW);
     return (
       <g>
         {[lo, (lo + hi) / 2, hi].map((t) => (
@@ -493,7 +505,7 @@ export function TimeChart({
         ))}
         {ticks.map((t) => (
           <text key={t} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
-            {hours ? hours.label(t) : new Date(t * 1000).getDate()}
+            {hours ? hours.label(t) : xTicks === "elapsed" ? fmtDuration(t - from) : new Date(t * 1000).getDate()}
           </text>
         ))}
       </g>
@@ -563,7 +575,7 @@ export function TimeChart({
             width={w}
             plotLeft={padL}
             top={padT}
-            title={xTicks === "hours" ? fmtTime(first.timestamp) : fmtShortDate(first.timestamp)}
+            title={xTicks === "hours" ? fmtTime(first.timestamp) : xTicks === "elapsed" ? `${fmtDuration(first.timestamp - from)} · ore ${fmtTime(first.timestamp)}` : fmtShortDate(first.timestamp)}
             lines={vals.flatMap((p, i) => (p ? [{ text: `${format(p.value)} ${series[i].label ?? ""}`.trim(), color: many ? series[i].color : undefined }] : []))}
           />
         </g>
@@ -572,7 +584,9 @@ export function TimeChart({
   }
 
   return (
-    <Surface boxRef={ref} ix={ix} width={w} height={height} rangeLabel={xTicks === "hours" ? hoursLabel : (v) => `${fmtShortDate(v.from)} – ${fmtShortDate(v.to)}`}>
+    <Surface boxRef={ref} ix={ix} width={w} height={height} rangeLabel={
+        xTicks === "hours" ? hoursLabel : xTicks === "elapsed" ? (v) => `${fmtDuration(v.from - from)}–${fmtDuration(v.to - from)}` : (v) => `${fmtShortDate(v.from)} – ${fmtShortDate(v.to)}`
+      }>
       <defs>
         <clipPath id={clip}>
           <rect x={padL} y={0} width={plotW} height={height} />

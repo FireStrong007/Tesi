@@ -65,6 +65,8 @@ export async function importFit(db: SqlExecutor, ctx: ImportContext, bytes: Uint
   const monitoring = new Map<number, FitRecord[]>();
   const sessions: FitRecord[] = [];
   const trackRecords: FitRecord[] = [];
+  const laps: FitRecord[] = [];
+  const zoneRecs: FitRecord[] = [];
   let sportName: string | null = null;
   let sleepStart: number | null = null;
 
@@ -222,6 +224,12 @@ export async function importFit(db: SqlExecutor, ctx: ImportContext, bytes: Uint
       case "record":
         trackRecords.push(rec);
         break;
+      case "lap":
+        laps.push(rec);
+        break;
+      case "time_in_zone":
+        zoneRecs.push(rec);
+        break;
       case "sport":
         if (typeof f.name === "string") sportName = f.name;
         break;
@@ -305,6 +313,12 @@ export async function importFit(db: SqlExecutor, ctx: ImportContext, bytes: Uint
       const end = s.timestamp && s.timestamp > start ? s.timestamp : start + Math.round(elapsed);
       const summary: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(f)) if (v !== null && typeof v !== "bigint") summary[k] = v;
+      // heart-rate zones the band used for this session (boundaries, max/resting HR, time per zone)
+      const z = zoneRecs.find((r) => num(r.fields.reference_mesg) === 18 && (r.fields.reference_index ?? 0) === (f.message_index ?? 0)) ?? zoneRecs.find((r) => num(r.fields.reference_mesg) === 18);
+      if (z) {
+        const zf = z.fields;
+        summary._zones = { bounds: zf.hr_zone_high_boundary ?? null, times: zf.time_in_hr_zone ?? null, max_hr: num(zf.max_heart_rate), resting_hr: num(zf.resting_heart_rate) };
+      }
       await db.run("DELETE FROM workout WHERE device_id = ? AND start_time = ?", [d, start]);
       const res = await db.run(
         `INSERT INTO workout (device_id,user_id,fit_file_id,start_time,end_time,sport,sub_sport,name,elapsed_s,timer_s,distance_m,
@@ -320,12 +334,34 @@ export async function importFit(db: SqlExecutor, ctx: ImportContext, bytes: Uint
         const rf = r.fields;
         const lat = num(r.raw[0]);
         const lon = num(r.raw[1]);
+        const cad = num(rf.cadence);
         return {
-          sql: "INSERT OR REPLACE INTO workout_record VALUES (?,?,?,?,?,?,?,?,?)",
+          sql: `INSERT OR REPLACE INTO workout_record (workout_id,timestamp,heart_rate,lat,lon,altitude,speed,distance,cadence,temperature)
+            VALUES (?,?,?,?,?,?,?,?,?,?)`,
           params: [workoutId!, r.timestamp, num(rf.heart_rate), lat !== null ? lat * SEMICIRCLE : null, lon !== null ? lon * SEMICIRCLE : null,
-            num(rf.enhanced_altitude) ?? num(rf.altitude), num(rf.enhanced_speed) ?? num(rf.speed), num(rf.distance), num(rf.cadence)],
+            num(rf.enhanced_altitude) ?? num(rf.altitude), num(rf.enhanced_speed) ?? num(rf.speed), num(rf.distance),
+            cad !== null ? cad + (num(rf.fractional_cadence) ?? 0) : null, num(rf.temperature)],
         };
       });
+      const ls: Statement[] = laps
+        .filter((l) => {
+          const t = num(l.fields.start_time) ?? l.timestamp;
+          return t !== null && t >= start && t <= end;
+        })
+        .map((l, i) => {
+          const lf = l.fields;
+          const cadence = (v: FitRecord["fields"][string], frac: FitRecord["fields"][string]) => (num(v) !== null ? num(v)! + (num(frac) ?? 0) : null);
+          return {
+            sql: `INSERT OR REPLACE INTO workout_lap (workout_id,idx,start_time,elapsed_s,timer_s,distance_m,calories,avg_speed,max_speed,
+              avg_hr,max_hr,avg_cadence,max_cadence,ascent_m,descent_m,lap_trigger) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            params: [workoutId!, i, num(lf.start_time) ?? l.timestamp, num(lf.total_elapsed_time), num(lf.total_timer_time), num(lf.total_distance),
+              num(lf.total_calories), num(lf.enhanced_avg_speed) ?? num(lf.avg_speed), num(lf.enhanced_max_speed) ?? num(lf.max_speed),
+              num(lf.avg_heart_rate), num(lf.max_heart_rate), cadence(lf.avg_cadence, lf.avg_fractional_cadence),
+              cadence(lf.max_cadence, lf.max_fractional_cadence), num(lf.total_ascent), num(lf.total_descent), num(lf.lap_trigger)],
+          };
+        });
+      if (ls.length) await db.batch(ls);
+      counts.workout_lap = (counts.workout_lap ?? 0) + ls.length;
       if (rs.length) await db.batch(rs);
       counts.workout_record = (counts.workout_record ?? 0) + rs.length;
     }

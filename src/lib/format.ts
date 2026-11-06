@@ -47,8 +47,18 @@ export function fmtRelative(ts: number | null | undefined) {
 
 export function fmtPace(speed: number | null | undefined) {
   if (!speed) return "–";
-  const secPerKm = 1000 / speed;
-  return `${Math.floor(secPerKm / 60)}:${String(Math.round(secPerKm % 60)).padStart(2, "0")} /km`;
+  const secPerKm = Math.round(1000 / speed);
+  return `${Math.floor(secPerKm / 60)}:${String(secPerKm % 60).padStart(2, "0")} /km`;
+}
+
+/** 1234 -> "20 min 34 s", 4000 -> "1 h 06 min" (Gadgetbridge style, for tiles) */
+export function fmtDurationWords(sec: number | null | undefined) {
+  if (sec === null || sec === undefined || Number.isNaN(sec)) return "–";
+  const s = Math.round(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h) return `${h} h ${String(m).padStart(2, "0")} min`;
+  return m ? `${m} min ${s % 60} s` : `${s} s`;
 }
 
 export function fmtBytes(n: number) {

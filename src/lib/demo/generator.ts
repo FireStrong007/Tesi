@@ -301,28 +301,78 @@ function activityFile(w: { start: number; duration: number; sport: number; name:
   ]);
   const isRun = w.sport === 1;
   const speed = isRun ? 2.9 : 1.35; // m/s
+  const maxHr = 186;
+  const restHr = 58;
+  // Garmin default zones (% of max HR): high boundaries of zones 0..5
+  const bounds = [0.5, 0.6, 0.7, 0.8, 0.9, 1].map((k) => Math.round(maxHr * k));
+  const zoneTime = [0, 0, 0, 0, 0, 0];
   // a loop around Milan's Parco Sempione
   const lat0 = 45.4731;
   const lon0 = 9.1749;
+  const warmup = isRun ? 240 : 0; // the first minutes of a run are walked/jogged
   let dist = 0;
-  let vNow = speed;
-  let hrW = isRun ? 120 : 85;
+  let vNow = speed * 0.5;
+  let hrW = isRun ? 95 : 85;
   let hrSum = 0;
   let hrMax = 0;
+  let hrMin = 255;
+  let cadSum = 0;
+  let cadMax = 0;
   let n = 0;
-  for (let t = w.start; t <= w.start + w.duration; t += 5) {
+  let temp = 26;
+  const STEP = 5;
+  // laps: auto-lap every km, like a Garmin set to metric units
+  let lap = { start: w.start, dist: 0, hr: 0, hrMax: 0, cad: 0, n: 0, vMax: 0 };
+  let lapIndex = 0;
+  const writeLap = (t: number, trigger: number) => {
+    const elapsed = t - lap.start;
+    if (elapsed <= 0 || !lap.n) return;
+    const d = dist - lap.dist;
+    e.write(19, [
+      { num: 253, base: B.UINT32, value: toGarminTs(t) },
+      { num: 254, base: B.UINT16, value: lapIndex++ },
+      { num: 2, base: B.UINT32, value: toGarminTs(lap.start) },
+      { num: 7, base: B.UINT32, value: elapsed * 1000 },
+      { num: 8, base: B.UINT32, value: elapsed * 1000 },
+      { num: 9, base: B.UINT32, value: Math.round(d * 100) },
+      { num: 11, base: B.UINT16, value: Math.round((isRun ? 10.5 : 4.5) * (elapsed / 60)) },
+      { num: 110, base: B.UINT32, value: Math.round((d / elapsed) * 1000) },
+      { num: 111, base: B.UINT32, value: Math.round(lap.vMax * 1000) },
+      { num: 15, base: B.UINT8, value: Math.round(lap.hr / lap.n) },
+      { num: 16, base: B.UINT8, value: lap.hrMax },
+      { num: 17, base: B.UINT8, value: Math.round(lap.cad / lap.n) },
+      { num: 24, base: B.ENUM, value: trigger },
+    ]);
+    lap = { start: t, dist, hr: 0, hrMax: 0, cad: 0, n: 0, vMax: 0 };
+  };
+  for (let t = w.start; t <= w.start + w.duration; t += STEP) {
     const p = (t - w.start) / w.duration;
     const ang = p * Math.PI * 2 * (isRun ? 3 : 2);
     const lat = lat0 + Math.sin(ang) * 0.004;
     const lon = lon0 + Math.cos(ang) * 0.006;
-    vNow += (speed * (0.95 + rand() * 0.1) - vNow) * 0.15;
+    const target = t - w.start < warmup ? speed * 0.55 : speed * (0.95 + rand() * 0.1);
+    vNow += (target - vNow) * 0.15;
     const v = vNow;
-    dist += v * 5;
-    hrW += ((isRun ? 138 : 96) + p * 20 - hrW) * 0.1 + (rand() - 0.5) * 2;
+    dist += v * STEP;
+    const hrTarget = (isRun ? (t - w.start < warmup ? 112 : 142) : 96) + p * 18;
+    hrW += (hrTarget - hrW) * 0.08 + (rand() - 0.5) * 2;
     const hr = Math.round(hrW);
+    // strides per minute (FIT running cadence), the app shows steps = strides × 2
+    const cad = isRun ? (t - w.start < warmup ? 58 : 80) + Math.round(rand() * 4) : 55 + Math.round(rand() * 6);
+    if (rand() < 0.01) temp += rand() < 0.6 ? -1 : 1;
     hrSum += hr;
     hrMax = Math.max(hrMax, hr);
+    hrMin = Math.min(hrMin, hr);
+    cadSum += cad;
+    cadMax = Math.max(cadMax, cad);
     n++;
+    const zone = bounds.findIndex((b) => hr <= b);
+    zoneTime[zone < 0 ? 5 : zone] += STEP;
+    lap.hr += hr;
+    lap.hrMax = Math.max(lap.hrMax, hr);
+    lap.cad += cad;
+    lap.vMax = Math.max(lap.vMax, v);
+    lap.n++;
     e.write(20, [
       { num: 253, base: B.UINT32, value: toGarminTs(t) },
       { num: 0, base: B.SINT32, value: Math.round((lat * 2 ** 31) / 180) },
@@ -331,23 +381,50 @@ function activityFile(w: { start: number; duration: number; sport: number; name:
       { num: 5, base: B.UINT32, value: Math.round(dist * 100) },
       { num: 73, base: B.UINT32, value: Math.round(v * 1000) },
       { num: 78, base: B.UINT32, value: Math.round((122 + Math.sin(ang) * 4 + 500) * 5) },
-      { num: 4, base: B.UINT8, value: isRun ? 82 + Math.round(rand() * 6) : 55 + Math.round(rand() * 6) },
+      { num: 4, base: B.UINT8, value: cad },
+      { num: 13, base: B.SINT8, value: temp },
     ]);
+    if (dist - lap.dist >= 1000) writeLap(t, 2);
   }
+  const end = w.start + w.duration;
+  writeLap(end, 7);
+  e.write(216, [
+    { num: 253, base: B.UINT32, value: toGarminTs(end) },
+    { num: 0, base: B.UINT16, value: 18 },
+    { num: 1, base: B.UINT16, value: 0 },
+    { num: 2, base: B.UINT32, value: zoneTime.map((s) => s * 1000) },
+    { num: 6, base: B.UINT8, value: bounds },
+    { num: 11, base: B.UINT8, value: maxHr },
+    { num: 12, base: B.UINT8, value: restHr },
+  ]);
+  const minutes = w.duration / 60;
   e.write(18, [
-    { num: 253, base: B.UINT32, value: toGarminTs(w.start + w.duration) },
+    { num: 253, base: B.UINT32, value: toGarminTs(end) },
+    { num: 254, base: B.UINT16, value: 0 },
     { num: 2, base: B.UINT32, value: toGarminTs(w.start) },
     { num: 5, base: B.ENUM, value: w.sport },
     { num: 6, base: B.ENUM, value: 0 },
     { num: 7, base: B.UINT32, value: w.duration * 1000 },
     { num: 8, base: B.UINT32, value: w.duration * 1000 },
     { num: 9, base: B.UINT32, value: Math.round(dist * 100) },
-    { num: 11, base: B.UINT16, value: Math.round((isRun ? 10.5 : 4.5) * (w.duration / 60)) },
+    { num: 10, base: B.UINT32, value: Math.round(cadSum * (STEP / 60)) },
+    { num: 11, base: B.UINT16, value: Math.round((isRun ? 10.5 : 4.5) * minutes) },
     { num: 16, base: B.UINT8, value: Math.round(hrSum / n) },
     { num: 17, base: B.UINT8, value: hrMax },
+    { num: 64, base: B.UINT8, value: hrMin },
+    { num: 18, base: B.UINT8, value: Math.round(cadSum / n) },
+    { num: 19, base: B.UINT8, value: cadMax },
     { num: 22, base: B.UINT16, value: Math.round(15 + rand() * 30) },
     { num: 23, base: B.UINT16, value: Math.round(15 + rand() * 30) },
+    { num: 24, base: B.UINT8, value: isRun ? 28 + Math.round(rand() * 8) : 12 + Math.round(rand() * 6) },
+    { num: 137, base: B.UINT8, value: isRun ? Math.round(rand() * 6) : 0 },
+    { num: 57, base: B.SINT8, value: 25 },
+    { num: 58, base: B.SINT8, value: 27 },
+    { num: 150, base: B.SINT8, value: 23 },
+    { num: 178, base: B.UINT16, value: Math.round((isRun ? 8 : 4) * minutes) },
+    { num: 215, base: B.UINT8, value: 62 },
+    { num: 216, base: B.UINT8, value: isRun ? 55 : 59 },
     { num: 124, base: B.UINT32, value: Math.round((dist / w.duration) * 1000) },
   ]);
-  return { dataType: 128, subType: 4, fileNumber: number, date: w.start + w.duration, data: e.finish() };
+  return { dataType: 128, subType: 4, fileNumber: number, date: end, data: e.finish() };
 }

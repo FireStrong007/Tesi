@@ -6,7 +6,7 @@
  * same schema works for a single local user and, later, for a multi-patient
  * database opened by a doctor.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const MIGRATIONS: string[] = [
   /* v1 */ `
@@ -210,6 +210,18 @@ export const MIGRATIONS: string[] = [
     device_id INTEGER NOT NULL REFERENCES device(id) ON DELETE CASCADE, user_id INTEGER NOT NULL,
     start INTEGER NOT NULL, "end" INTEGER NOT NULL,
     PRIMARY KEY (device_id, start)) WITHOUT ROWID;
+  `,
+  /* v5: laps of an activity (FIT "lap" messages, e.g. auto-lap every km/mile) and the
+     temperature of each track point. Activities imported before need "Rielabora file". */ `
+  CREATE TABLE IF NOT EXISTS workout_lap (
+    workout_id INTEGER NOT NULL REFERENCES workout(id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    start_time INTEGER NOT NULL,
+    elapsed_s REAL, timer_s REAL, distance_m REAL, calories INTEGER,
+    avg_speed REAL, max_speed REAL, avg_hr INTEGER, max_hr INTEGER, avg_cadence REAL, max_cadence REAL,
+    ascent_m REAL, descent_m REAL, lap_trigger INTEGER,
+    PRIMARY KEY (workout_id, idx)) WITHOUT ROWID;
+  ALTER TABLE workout_record ADD COLUMN temperature REAL;
   `,
 ];
 

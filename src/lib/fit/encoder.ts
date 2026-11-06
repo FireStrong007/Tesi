@@ -12,8 +12,8 @@ type Base = (typeof BaseType)[keyof typeof BaseType];
 export interface EncField {
   num: number;
   base: Base;
-  /** raw (unscaled) value; null writes the invalid value; for STRING pass size */
-  value: number | string | null;
+  /** raw (unscaled) value; null writes the invalid value; for STRING pass size; an array writes an array field */
+  value: number | string | null | (number | null)[];
   size?: number;
 }
 
@@ -31,7 +31,8 @@ export class FitEncoder {
   /** Writes a message; definitions are emitted automatically (local type 0..15 by global number). */
   write(globalNum: number, fields: EncField[]) {
     const local = globalNum % 16;
-    const sig = globalNum + ":" + fields.map((f) => `${f.num}/${f.base}/${f.size ?? SIZE[f.base]}`).join(",");
+    const sizeOf = (f: EncField) => f.size ?? (Array.isArray(f.value) ? f.value.length * SIZE[f.base] : SIZE[f.base]);
+    const sig = globalNum + ":" + fields.map((f) => `${f.num}/${f.base}/${sizeOf(f)}`).join(",");
     if (this.defined.get(local) !== sig) {
       this.w.u8(0x40 | local);
       this.w.u8(0);
@@ -40,7 +41,7 @@ export class FitEncoder {
       this.w.u8(fields.length);
       for (const f of fields) {
         this.w.u8(f.num);
-        this.w.u8(f.size ?? SIZE[f.base]);
+        this.w.u8(sizeOf(f));
         this.w.u8(f.base);
       }
       this.defined.set(local, sig);
@@ -51,6 +52,10 @@ export class FitEncoder {
 
   private writeValue(f: EncField) {
     const v = f.value;
+    if (Array.isArray(v)) {
+      for (const x of v) this.writeValue({ num: f.num, base: f.base, value: x });
+      return;
+    }
     if (f.base === BaseType.STRING) {
       const size = f.size ?? 16;
       const bytes = new TextEncoder().encode(String(v ?? ""));

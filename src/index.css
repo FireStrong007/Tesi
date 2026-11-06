@@ -46,6 +46,12 @@
   --resp: oklch(0.7 0.1 170);
   --calories: oklch(0.7 0.17 45);
   --chart-grid: oklch(0.92 0.01 210);
+  /* heart-rate zones 1..5 (Gadgetbridge: grey, light blue, green, orange, red) */
+  --zone-1: oklch(0.7 0.02 240);
+  --zone-2: oklch(0.72 0.12 225);
+  --zone-3: oklch(0.68 0.16 145);
+  --zone-4: oklch(0.72 0.17 55);
+  --zone-5: oklch(0.6 0.21 25);
 }
 
 .dark {
