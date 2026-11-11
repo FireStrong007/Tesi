@@ -112,7 +112,15 @@ export function restingCalories(bmrPerDay: number | null, dayStart: number, dayE
   return Math.round((bmrPerDay * elapsed) / (dayEnd - dayStart));
 }
 
+// ------------------------------------------------------------------ intensity minutes
+
+/** Garmin/WHO intensity minutes: vigorous minutes count double. */
+export const intensityScore = (moderate: number, vigorous: number) => moderate + 2 * vigorous;
+
 // ------------------------------------------------------------------ sleep
+
+/** Minutes actually asleep in a night (awake time excluded). */
+export const asleepMinutes = (m: { light: number; deep: number; rem: number }) => m.light + m.deep + m.rem;
 
 /** Sleep debt over the nights with data: sum of (goal - slept) where slept < goal. */
 export function sleepDebt(nightsMinutes: (number | null)[], goalMin: number): number {

@@ -52,6 +52,8 @@
   --zone-3: oklch(0.68 0.16 145);
   --zone-4: oklch(0.72 0.17 55);
   --zone-5: oklch(0.6 0.21 25);
+  /* other users' average in the comparison overlay: magenta, far from every metric colour */
+  --compare: oklch(0.56 0.24 340);
 }
 
 .dark {
@@ -78,6 +80,7 @@
   --stress-high: oklch(0.62 0.19 25);
   --rmr: oklch(0.68 0.14 265);
   --sleep-deep: oklch(0.55 0.17 270);
+  --compare: oklch(0.74 0.19 340);
 }
 
 @theme inline {
@@ -115,6 +118,7 @@
   --color-hrv: var(--hrv);
   --color-resp: var(--resp);
   --color-calories: var(--calories);
+  --color-compare: var(--compare);
   --color-goal: var(--goal);
   --color-rmr: var(--rmr);
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;

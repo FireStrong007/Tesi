@@ -83,31 +83,90 @@ export class WebBluetoothTransport implements BleTransport {
     return this.device.name ?? "Garmin";
   }
 
-  static async connect(device: BluetoothDevice, log: (m: string) => void): Promise<WebBluetoothTransport> {
-    const t = new WebBluetoothTransport(device);
-    device.addEventListener("gattserverdisconnected", () => t.disconnectHandlers.forEach((h) => h()));
-    log(`Connessione GATT a ${device.name ?? device.id}…`);
-    const server = await withTimeout(device.gatt!.connect(), 20_000, "Timeout connessione GATT");
-    const service = await server.getPrimaryService(GARMIN_ML_SERVICE);
-    for (let i = 0; i < RX.length; i++) {
+  /**
+   * Connects and opens the Multi-Link channel. Real bands often accept the GATT connection and
+   * drop it a moment later (another app holds the band, pairing in progress, Android's flaky
+   * first connect): those drops are retried, and the final error says at which step it happened.
+   */
+  static async connect(device: BluetoothDevice, log: (m: string) => void, attempts = 3): Promise<WebBluetoothTransport> {
+    let last: GattSetupError | null = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        const rx = await service.getCharacteristic(uuid(RX[i]));
-        const tx = await service.getCharacteristic(uuid(TX[i]));
-        t.rx = rx;
-        t.tx = tx;
-        log(`Caratteristiche Multi-Link trovate: ${RX[i].toString(16)} / ${TX[i].toString(16)}`);
-        break;
-      } catch {
-        /* try next pair */
+        return await WebBluetoothTransport.connectOnce(device, log);
+      } catch (e) {
+        last = e instanceof GattSetupError ? e : new GattSetupError("connessione", false, e);
+        try {
+          device.gatt?.disconnect();
+        } catch {
+          /* ignore */
+        }
+        log(`Tentativo ${attempt}/${attempts} non riuscito durante ${last.step}: ${last.cause instanceof Error ? last.cause.message : String(last.cause)}`);
+        if (!last.dropped || attempt === attempts) break;
+        const wait = attempt * 2000;
+        log(`Il bracciale ha chiuso la connessione: nuovo tentativo tra ${wait / 1000} s…`);
+        await new Promise((r) => setTimeout(r, wait));
       }
     }
-    if (!t.rx || !t.tx) throw new Error("Caratteristiche Garmin Multi-Link non trovate: è un dispositivo Garmin compatibile?");
-    t.useWithoutResponse = !!t.tx.properties.writeWithoutResponse && !t.tx.properties.write;
-    t.rx.addEventListener("characteristicvaluechanged", (ev) => {
-      const v = (ev.target as BluetoothRemoteGATTCharacteristic).value!;
-      t.notifyHandler(new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength)));
-    });
-    await t.rx.startNotifications();
+    throw new Error(explainSetupError(last!, attempts));
+  }
+
+  private static async connectOnce(device: BluetoothDevice, log: (m: string) => void): Promise<WebBluetoothTransport> {
+    const t = new WebBluetoothTransport(device);
+    let step = "la connessione";
+    let dropped = false;
+    const onDropDuringSetup = () => {
+      dropped = true;
+      log(`Il bracciale si è disconnesso durante ${step}`);
+    };
+    device.addEventListener("gattserverdisconnected", onDropDuringSetup);
+    const alive = (server: BluetoothRemoteGATTServer) => {
+      if (dropped || !server.connected) throw new GattSetupError(step, true, new Error("GATT disconnesso"));
+    };
+    try {
+      log(`Connessione GATT a ${device.name ?? device.id}…`);
+      const server = await withTimeout(device.gatt!.connect(), 20_000, "Timeout connessione GATT");
+      alive(server);
+      step = "la ricerca del servizio Garmin";
+      const service = await server.getPrimaryService(GARMIN_ML_SERVICE);
+      log("Servizio Garmin Multi-Link trovato");
+      step = "la ricerca delle caratteristiche";
+      for (let i = 0; i < RX.length; i++) {
+        try {
+          const rx = await service.getCharacteristic(uuid(RX[i]));
+          const tx = await service.getCharacteristic(uuid(TX[i]));
+          t.rx = rx;
+          t.tx = tx;
+          log(`Caratteristiche Multi-Link trovate: ${RX[i].toString(16)} / ${TX[i].toString(16)}`);
+          break;
+        } catch (e) {
+          alive(server); // a missing pair is fine, a dropped link is not
+          void e;
+        }
+      }
+      if (!t.rx || !t.tx) throw new Error("Caratteristiche Garmin Multi-Link non trovate: è un dispositivo Garmin compatibile?");
+      t.useWithoutResponse = !!t.tx.properties.writeWithoutResponse && !t.tx.properties.write;
+      t.rx.addEventListener("characteristicvaluechanged", (ev) => {
+        const v = (ev.target as BluetoothRemoteGATTCharacteristic).value!;
+        t.notifyHandler(new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength)));
+      });
+      // enabling notifications is the first encrypted operation: Android may show the pairing request here
+      step = "l'attivazione delle notifiche (abbinamento)";
+      await t.rx.startNotifications();
+      alive(server);
+      log("Notifiche attive, canale pronto");
+    } catch (e) {
+      device.removeEventListener("gattserverdisconnected", onDropDuringSetup);
+      if (e instanceof GattSetupError) throw e;
+      throw new GattSetupError(step, dropped || !device.gatt?.connected, e);
+    }
+    device.removeEventListener("gattserverdisconnected", onDropDuringSetup);
+    // one listener per connection, removed when it fires: an old connection must not report
+    // "disconnected" for a newer one on the same BluetoothDevice
+    const onGone = () => {
+      device.removeEventListener("gattserverdisconnected", onGone);
+      t.disconnectHandlers.forEach((h) => h());
+    };
+    device.addEventListener("gattserverdisconnected", onGone);
     return t;
   }
 
@@ -137,6 +196,32 @@ export class WebBluetoothTransport implements BleTransport {
     }
     this.device.gatt?.disconnect();
   }
+}
+
+/** Failure while opening the channel; `dropped` = the band closed the link (worth retrying). */
+export class GattSetupError extends Error {
+  constructor(
+    readonly step: string,
+    readonly dropped: boolean,
+    readonly cause: unknown,
+  ) {
+    super(`${step}: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+}
+
+/** Turns a setup failure into advice the user can act on (in Italian, shown in the device card). */
+export function explainSetupError(e: GattSetupError, attempts: number): string {
+  const raw = e.cause instanceof Error ? e.cause.message : String(e.cause);
+  if (!e.dropped) return `Connessione non riuscita durante ${e.step}: ${raw}`;
+  const pairing = e.step.startsWith("l'attivazione");
+  return (
+    `Il bracciale ha chiuso la connessione durante ${e.step} (${attempts} tentativi). ` +
+    "Di solito succede quando è ancora collegato a un'altra app: chiudi o forza l'arresto di Gadgetbridge e Garmin Connect " +
+    "(o spegni il Bluetooth del telefono a cui erano collegati) e riprova. " +
+    (pairing
+      ? "Se il telefono non ha chiesto un codice di abbinamento, abbina prima il bracciale dalle impostazioni Bluetooth di Android, con il bracciale in modalità abbinamento."
+      : "Se continua, riavvia il Bluetooth del telefono e tieni il bracciale vicino.")
+  );
 }
 
 export function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {

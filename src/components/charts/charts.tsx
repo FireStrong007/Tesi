@@ -208,6 +208,25 @@ export interface BarItem {
   segments?: { value: number; color: string }[];
 }
 
+/** A second daily series drawn over the bars as a line with points (e.g. the other users' average). */
+export interface BarOverlay {
+  /** one value per bar; null = no value that day (the line breaks) */
+  values: (number | null)[];
+  color: string;
+  /** tooltip label of the overlay value */
+  label: string;
+  /** tooltip detail after the value, per bar (e.g. "n = 48") */
+  detail?: (i: number) => string | undefined;
+  /** the user's own value per bar, shown as "Tu: …" in the tooltip */
+  mine?: (number | null)[];
+  mineLabel?: string;
+  /** colour of the user's value in the tooltip (default: the bar's colour) */
+  mineColor?: string;
+  /** keep the bar's own tooltip line too (min–max bars, where "Tu" is another quantity) */
+  keepBarLine?: boolean;
+  format?: (v: number) => string;
+}
+
 export interface RefLine {
   value: number;
   color: string;
@@ -228,6 +247,7 @@ export function BarChart({
   valueFormat,
   yMin,
   yMax,
+  overlay,
 }: {
   items: BarItem[];
   height?: number;
@@ -243,6 +263,7 @@ export function BarChart({
   valueFormat?: (v: number) => string;
   yMin?: number;
   yMax?: number;
+  overlay?: BarOverlay;
 }) {
   const [ref, { width: w }] = useSize<HTMLDivElement>();
   const padL = 40;
@@ -267,7 +288,7 @@ export function BarChart({
     },
   });
 
-  const top = Math.max(goal ?? 0, ...refLines.map((r) => r.value), ...items.map((i) => Math.max(i.value, i.marker ?? 0)));
+  const top = Math.max(goal ?? 0, ...refLines.map((r) => r.value), ...items.map((i) => Math.max(i.value, i.marker ?? 0)), ...(overlay?.values ?? []).map((v) => v ?? 0));
   const max = yMax ?? niceMax(top * 1.08);
   const min = yMin ?? 0;
   const y = (v: number) => padT + plotH - ((Math.max(min, v) - min) / (max - min || 1)) * plotH;
@@ -354,23 +375,48 @@ export function BarChart({
     [items, w, min, max, plotH, height, selected, showValues, labelEvery, goal, refLines, color, vf], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  // overlay: a line through the bar centres, broken where there is no value, with a halo in the
+  // card colour so it stays readable where it crosses the bars
+  const overlayLayer = useMemo(() => {
+    if (!overlay || w <= 0) return null;
+    const cx = (i: number) => padL + i * bw + bw / 2;
+    let d = "";
+    overlay.values.forEach((v, i) => {
+      if (v == null) return;
+      d += `${i > 0 && overlay.values[i - 1] != null ? "L" : "M"}${cx(i).toFixed(1)},${y(v).toFixed(1)}`;
+    });
+    const r = Math.max(2, Math.min(3.5, bw / 4));
+    return (
+      <g pointerEvents="none">
+        <path d={d} fill="none" stroke="var(--card)" strokeWidth={4.5} strokeLinejoin="round" strokeLinecap="round" />
+        <path d={d} fill="none" stroke={overlay.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+        {overlay.values.map((v, i) => (v == null ? null : <circle key={i} cx={cx(i)} cy={y(v)} r={r} fill={overlay.color} stroke="var(--card)" strokeWidth={1.5} />))}
+      </g>
+    );
+  }, [overlay, w, min, max, plotH, bw]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const hover = ix.hoverX !== null ? indexAt(ix.hoverX) : null;
   const hit = hover !== null ? items[hover] : null;
+  const barLine = hit ? { text: hit.base !== undefined ? `${vf(hit.base)} – ${vf(hit.value)}` : vf(hit.value) } : null;
+  let lines: TipLine[] = barLine ? [barLine] : [];
+  if (hit && overlay) {
+    const of = overlay.format ?? vf;
+    const mine = overlay.mine?.[hover!];
+    const other = overlay.values[hover!];
+    const detail = overlay.detail?.(hover!);
+    lines = [
+      ...(overlay.keepBarLine ? lines : []),
+      ...(overlay.mine ? [{ text: `${overlay.mineLabel ?? "Tu"}: ${mine != null ? of(mine) : "–"}`, color: overlay.mineColor ?? hit.color ?? color }] : []),
+      { text: `${overlay.label}: ${other != null ? of(other) : "–"}${detail ? ` · ${detail}` : ""}`, color: overlay.color },
+    ];
+  }
   return (
     <Surface boxRef={ref} ix={ix} width={w} height={height} cursor={onSelect ? "cursor-pointer" : undefined}>
       {grid}
       {hover !== null && <rect x={padL + hover * bw} y={padT} width={bw} height={plotH} fill="color-mix(in oklch, var(--accent) 60%, transparent)" rx={4} pointerEvents="none" />}
       {bars}
-      {hit && (
-        <Tooltip
-          x={padL + hover! * bw + bw / 2}
-          width={w}
-          plotLeft={padL}
-          top={padT}
-          title={hit.label}
-          lines={[{ text: hit.base !== undefined ? `${vf(hit.base)} – ${vf(hit.value)}` : vf(hit.value) }]}
-        />
-      )}
+      {overlayLayer}
+      {hit && <Tooltip x={padL + hover! * bw + bw / 2} width={w} plotLeft={padL} top={padT} title={hit.label} lines={lines} />}
     </Surface>
   );
 }

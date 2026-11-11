@@ -1,5 +1,5 @@
 /** Per-day aggregates for the week / month views. */
-import { stressMinutes, type StressKey } from "./metrics";
+import { STRESS_MIN_VALID, stressMinutes, type StressKey } from "./metrics";
 import { COVERAGE_SQL, addDays, dailyTotals, stressSamples, hrvSummaries, intensityMinutes, sleepSessions, startOfDay, type DayTotals, type HrvSummary, type SleepSession } from "./db/repo";
 import type { SqlExecutor } from "./db/sql";
 
@@ -83,7 +83,8 @@ export async function loadRange(db: SqlExecutor, userId: number, from: number, t
     sleepSessions(db, userId, from - 12 * 3600, to),
     dailyStats(db, "activity_sample", "heart_rate", userId, from, to, "AND heart_rate > 0"),
     dailyStats(db, "resting_hr_sample", "heart_rate", userId, from, to + 3600),
-    dailyStats(db, "stress_sample", "stress", userId, from, to),
+    // only valid samples (Gadgetbridge: values < 1 are "not measured")
+    dailyStats(db, "stress_sample", "stress", userId, from, to, `AND stress >= ${STRESS_MIN_VALID}`),
     dailyStats(db, "body_energy_sample", "energy", userId, from, to),
     dailyStats(db, "spo2_sample", "spo2", userId, from, to),
     dailyStats(db, "respiratory_rate_sample", "rate", userId, from, to),

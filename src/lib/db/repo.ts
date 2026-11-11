@@ -5,6 +5,7 @@
 import type { DirectoryEntry } from "../garmin/gfdi";
 import { fileTypeOf } from "../garmin/filetypes";
 import { one, type SqlExecutor } from "./sql";
+import { asleepMinutes } from "../metrics";
 
 export interface User {
   id: number;
@@ -449,7 +450,7 @@ export async function sleepSessions(db: SqlExecutor, userId: number, from: numbe
   return sessions.filter((s) => s.end > from && s.end <= to + 43200 && s.end - s.start >= 20 * 60);
 }
 
-export const sleepTotal = (s: SleepSession) => s.minutes.light + s.minutes.deep + s.minutes.rem;
+export const sleepTotal = (s: SleepSession) => asleepMinutes(s.minutes);
 
 // ------------------------------------------------------------------ workouts
 
