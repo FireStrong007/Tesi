@@ -76,13 +76,16 @@ export function ChartsPage() {
   const metric = METRICS.find((m) => m.id === tab)!;
   const asked = q.get("period") as Period | null;
   const period: Period = asked && metric.periods.includes(asked) ? asked : metric.periods[0];
-  // "Confronta" stays on while changing metric, period or date (&compare=1)
-  const compare = q.get("compare") === "1";
+  // "Confronta" is page state, not part of the URL: toggling it must not navigate (which scrolls to
+  // the top). It stays on while moving between months of the same chart and turns off when the
+  // metric or the period changes, so it has to be asked for each time.
+  const [compareOn, setCompareOn] = useState<string | null>(null);
+  const compareKey = `${tab}:${period}`;
+  const compare = compareOn === compareKey;
   const set = (p: Record<string, string | number>) => {
     const n = new URLSearchParams({ tab, day: String(day), period });
-    if (compare) n.set("compare", "1");
     for (const [k, v] of Object.entries(p)) n.set(k, String(v));
-    if (n.get("compare") !== "1") n.delete("compare");
+    if (n.get("tab") !== tab || n.get("period") !== period) setCompareOn(null);
     navigate(`/charts?${n.toString()}`, true);
   };
   const openDay = (d: number) => set({ day: d, period: "day" });
@@ -131,7 +134,7 @@ export function ChartsPage() {
             <DateNav day={day} onChange={(d) => set({ day: d })} period={period} />
           </div>
         </div>
-        {period === "day" ? <DayView tab={tab} day={day} /> : <RangeView tab={tab} day={day} period={period} onOpenDay={openDay} compare={compare} onCompare={(on) => set({ compare: on ? 1 : 0 })} />}
+        {period === "day" ? <DayView tab={tab} day={day} /> : <RangeView tab={tab} day={day} period={period} onOpenDay={openDay} compare={compare} onCompare={(on) => setCompareOn(on ? compareKey : null)} />}
       </PageBody>
     </>
   );
