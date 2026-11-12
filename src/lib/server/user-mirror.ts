@@ -7,6 +7,7 @@
  * the app's own values.
  */
 import type { SqlExecutor } from "../db/sql";
+import { STUDY_TIME_ZONE } from "../time-zone";
 import { loadRange, type RangeData } from "../range-data";
 import { SERVER_TABLES, ServerFormatConverter, type ServerTable } from "./fit-to-server";
 import { SERVER_SCHEMA } from "./schema";
@@ -66,5 +67,5 @@ async function rebuild(main: SqlExecutor, scratch: SqlExecutor, userId: number, 
     );
     await insertServerRows(scratch, ME, dev.lastInsertRowid, conv.rows());
   }
-  await createLocalViews(scratch, { materialize: true, timeZone });
+  await createLocalViews(scratch, { materialize: true, timeZone: timeZone ?? STUDY_TIME_ZONE });
 }

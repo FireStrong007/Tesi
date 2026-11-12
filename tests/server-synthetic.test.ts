@@ -15,7 +15,8 @@ import { FitEncoder, toGarminTs } from "../src/lib/fit/encoder";
 import { fitToServerRows, type Row } from "../src/lib/server/fit-to-server";
 import { SERVER_SCHEMA } from "../src/lib/server/schema";
 import { insertServerRows } from "../src/lib/server/server-source";
-import { createLocalViews, zoneTransitions } from "../src/lib/server/views";
+import { createLocalViews } from "../src/lib/server/views";
+import { STUDY_TIME_ZONE, processUsesZone, zoneTransitions } from "../src/lib/time-zone";
 import { memoryDb } from "./helpers";
 
 const OFFSET = 9 * 3600; // the band's clock: Asia/Tokyo, no daylight saving
@@ -189,5 +190,12 @@ describe("time zone of the views", () => {
       [Date.UTC(2026, 9, 25, 1) / 1000, 3600],
     ]);
     expect(zoneTransitions("Asia/Tokyo", 2026, 2027)).toEqual([[Date.UTC(2026, 0, 1) / 1000, 9 * 3600]]);
+  });
+
+  it("the tests run, like the server must, in the study's time zone", () => {
+    expect(STUDY_TIME_ZONE).toBe("Europe/Rome");
+    expect(processUsesZone(STUDY_TIME_ZONE)).toBe(true);
+    expect(processUsesZone("Asia/Tokyo")).toBe(false);
+    expect(processUsesZone("Europe/London")).toBe(false);
   });
 });

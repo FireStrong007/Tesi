@@ -7,13 +7,14 @@
  * Rows keep the server's USER_ID (the participant id) as user_id.
  *
  * The local day that splits the band's day counters comes from an explicit time zone (option
- * `timeZone`, today Europe/Rome for every participant, waiting for the professor's answer), never
- * from the server's own 'localtime': SQLite knows no time zones, so createLocalViews writes the
- * zone's UTC offsets (daylight saving included) into the TEMP table tz_offset.
- * Note: loadRange groups days with the time zone of the process that runs it (the browser in the
- * app; on a server run Node with TZ set to the same zone).
+ * `timeZone`, by default the study's: Europe/Rome for every participant), never from the
+ * server's own 'localtime': SQLite knows no time zones, so createLocalViews writes the zone's UTC
+ * offsets (daylight saving included) into the TEMP table tz_offset.
+ * loadRange groups days with the time zone of the process that runs it: the server comparison
+ * refuses to start unless that is the study's zone (see ServerComparisonSource.open).
  */
 import type { SqlExecutor } from "../db/sql";
+import { STUDY_TIME_ZONE, zoneTransitions } from "../time-zone";
 import { ActivityKind, NOT_MEASURED } from "./schema";
 
 /**
@@ -132,41 +133,10 @@ export const LOCAL_VIEWS: LocalView[] = [
  * index on (user_id, time), a snapshot to rebuild (call again) after new data is uploaded. Both
  * are idempotent and never write to the server's own tables.
  */
-export const DEFAULT_TIME_ZONE = "Europe/Rome";
-
-/** UTC offset (seconds) of a time zone at a moment. */
-export function zoneOffset(timeZone: string, ts: number): number {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" })
-    .formatToParts(new Date(ts * 1000))
-    .reduce<Record<string, number>>((o, p) => (p.type === "literal" ? o : { ...o, [p.type]: Number(p.value) }), {});
-  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) / 1000 - ts;
-}
-
-/** The zone's offset changes between two years: [from, offset] with the offset valid from that moment. */
-export function zoneTransitions(timeZone: string, fromYear = 2015, toYear = 2045): [number, number][] {
-  const start = Date.UTC(fromYear, 0, 1) / 1000;
-  const end = Date.UTC(toYear, 0, 1) / 1000;
-  const out: [number, number][] = [[start, zoneOffset(timeZone, start)]];
-  for (let t = start + 86400; t <= end; t += 86400) {
-    const o = zoneOffset(timeZone, t);
-    if (o === out[out.length - 1][1]) continue;
-    // the change happened within the last day: find the hour
-    let lo = t - 86400;
-    let hi = t;
-    while (hi - lo > 60) {
-      const mid = Math.floor((lo + hi) / 120) * 60;
-      if (zoneOffset(timeZone, mid) === o) hi = mid;
-      else lo = mid;
-    }
-    out.push([hi, o]);
-  }
-  return out;
-}
-
 export async function createLocalViews(db: SqlExecutor, opts: { materialize?: boolean; timeZone?: string } = {}) {
   await db.run("DROP TABLE IF EXISTS temp.tz_offset");
   await db.run("CREATE TEMP TABLE tz_offset (t INTEGER PRIMARY KEY, o INTEGER NOT NULL) WITHOUT ROWID");
-  await db.batch(zoneTransitions(opts.timeZone ?? DEFAULT_TIME_ZONE).map(([t, o]) => ({ sql: "INSERT INTO temp.tz_offset VALUES (?, ?)", params: [t, o] })));
+  await db.batch(zoneTransitions(opts.timeZone ?? STUDY_TIME_ZONE).map(([t, o]) => ({ sql: "INSERT INTO temp.tz_offset VALUES (?, ?)", params: [t, o] })));
   const existing = await db.all<{ name: string; type: string }>("SELECT name, type FROM sqlite_temp_master WHERE type IN ('view', 'table') AND name <> 'tz_offset'");
   for (const v of LOCAL_VIEWS) {
     const old = existing.find((e) => e.name === v.name);

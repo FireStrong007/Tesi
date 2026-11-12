@@ -13,5 +13,6 @@ export default defineConfig({
   optimizeDeps: { exclude: ["@sqlite.org/sqlite-wasm"] },
   worker: { format: "es" },
   server: { host: true },
-  test: { environment: "node", include: ["tests/**/*.test.ts"] },
+  // the study's time zone (src/lib/time-zone.ts): the same days locally and in CI
+  test: { environment: "node", include: ["tests/**/*.test.ts"], env: { TZ: "Europe/Rome" } },
 });
