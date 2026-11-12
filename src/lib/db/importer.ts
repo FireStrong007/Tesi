@@ -35,14 +35,30 @@ interface CounterState {
 interface MonitoringState {
   perType: Record<string, CounterState>;
   lastTs: number;
+  /** the band's offset from UTC (seconds), from the last monitoring_info.local_timestamp seen */
+  offset?: number;
+}
+
+/**
+ * The band's local day of a monitoring sample: the counters restart at the band's midnight, which
+ * follows the band's clock (monitoring_info.local_timestamp), not the browser's time zone. The
+ * value read at t covers the minute before it, so the sample at midnight closes the day before.
+ * Without the band's offset (e.g. the demo files) the browser's offset at that time is used.
+ */
+export function bandDay(t: number, offset: number | undefined): number {
+  const o = offset ?? -new Date((t - 60) * 1000).getTimezoneOffset() * 60;
+  return Math.floor((t - 60 + o) / 86400);
 }
 
 const SEMICIRCLE = 180 / 2 ** 31;
 
 /**
  * Garmin monitoring counters are cumulative per activity type and reset at midnight.
- * Returns the increment since the previous value; a lower value means the counter reset.
- * The first value ever seen is counted entirely (the steps happened earlier that day).
+ * Returns the increment since the previous value of the same day. The first value of a day is
+ * counted entirely (the steps happened earlier that day): the per-type state is cleared when a new
+ * local day starts (see importFit), otherwise a type that reappears after midnight would only count
+ * its increase over the previous day's total. A lower value within the day means the counter
+ * restarted (e.g. the band rebooted) and is counted entirely.
  */
 export function counterDelta(prev: number, cur: number): number {
   if (prev < 0) return cur;
@@ -62,6 +78,7 @@ export async function importFit(db: SqlExecutor, ctx: ImportContext, bytes: Uint
   let fileType: number | null = null;
   let lastTs: number | null = null;
   let lastMonitoringTs: number | null = null;
+  let bandOffset: number | undefined;
   const monitoring = new Map<number, FitRecord[]>();
   const sessions: FitRecord[] = [];
   const trackRecords: FitRecord[] = [];
@@ -135,6 +152,10 @@ export async function importFit(db: SqlExecutor, ctx: ImportContext, bytes: Uint
       }
 
       case "monitoring_info": {
+        // local_timestamp is the band's local time (raw, Garmin epoch): its offset from the UTC time
+        const local = num(rec.raw[0]);
+        const utc = num(rec.raw[253]);
+        if (local !== null && utc !== null) bandOffset = local - utc;
         const rmr = num(f.resting_metabolic_rate);
         if (ts === null || rmr === null) break;
         add("resting_metabolic_rate_sample", "INSERT OR REPLACE INTO resting_metabolic_rate_sample VALUES (?,?,?,?)", [d, u, ts, rmr]);
@@ -244,8 +265,11 @@ export async function importFit(db: SqlExecutor, ctx: ImportContext, bytes: Uint
     const row = (await db.all<{ value: string }>("SELECT value FROM meta WHERE key = ?", [stateKey]))[0];
     const state: MonitoringState = row ? JSON.parse(row.value) : { perType: {}, lastTs: 0 };
     const times = [...monitoring.keys()].sort((a, b) => a - b);
+    if (bandOffset !== undefined) state.offset = bandOffset;
     for (const t of times) {
       const seen = t <= state.lastTs;
+      // counters restart at midnight (Gadgetbridge: cumulative values per local day)
+      if (!seen && state.lastTs && bandDay(t, state.offset) !== bandDay(state.lastTs, state.offset)) state.perType = {};
       let steps = 0;
       let dist = 0;
       let cal = 0;

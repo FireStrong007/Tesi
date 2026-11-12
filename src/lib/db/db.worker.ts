@@ -5,14 +5,14 @@
  * Falls back to an in-memory database when OPFS is unavailable (e.g. private windows).
  */
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-import { migrate } from "./migrate";
+import { checkSchema, migrate, type SchemaRepair } from "./migrate";
 import { oo1All, oo1Batch, oo1Run, type Oo1Db, type SqlParam, type Statement } from "./sql";
 
 export type WorkerRequest =
   | { id: number; op: "init" }
-  | { id: number; op: "all"; sql: string; params?: SqlParam[] }
-  | { id: number; op: "run"; sql: string; params?: SqlParam[] }
-  | { id: number; op: "batch"; statements: Statement[] }
+  | { id: number; op: "all"; sql: string; params?: SqlParam[]; scratch?: boolean }
+  | { id: number; op: "run"; sql: string; params?: SqlParam[]; scratch?: boolean }
+  | { id: number; op: "batch"; statements: Statement[]; scratch?: boolean }
   | { id: number; op: "export" }
   | { id: number; op: "import"; bytes: Uint8Array }
   | { id: number; op: "wipe" };
@@ -21,6 +21,8 @@ export interface InitInfo {
   persistent: boolean;
   version: string;
   file: string;
+  /** what the startup schema check found missing and repaired (empty when the schema is complete) */
+  repairs: SchemaRepair[];
 }
 
 const DB_FILE = "/vitabridge.sqlite3";
@@ -30,6 +32,8 @@ let sqlite3: any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let pool: any = null;
 let db: Oo1Db | null = null;
+/** a separate in-memory database for computations that need other tables (e.g. the server format) */
+let scratchDb: Oo1Db | null = null;
 let info: InitInfo | null = null;
 
 async function open(): Promise<InitInfo> {
@@ -38,14 +42,26 @@ async function open(): Promise<InitInfo> {
   try {
     pool = await sqlite3.installOpfsSAHPoolVfs({ name: "vitabridge-pool", initialCapacity: 6 });
     db = new pool.OpfsSAHPoolDb(DB_FILE) as Oo1Db;
-    info = { persistent: true, version: sqlite3.version.libVersion, file: DB_FILE };
+    info = { persistent: true, version: sqlite3.version.libVersion, file: DB_FILE, repairs: [] };
   } catch (e) {
     console.warn("OPFS non disponibile, uso un database in memoria", e);
     db = new sqlite3.oo1.DB(":memory:") as Oo1Db;
-    info = { persistent: false, version: sqlite3.version.libVersion, file: ":memory:" };
+    info = { persistent: false, version: sqlite3.version.libVersion, file: ":memory:", repairs: [] };
   }
   migrate(db);
+  info.repairs = verify(db);
   return info;
+}
+
+/** Startup schema check against a fresh in-memory copy of the schema. */
+function verify(d: Oo1Db): SchemaRepair[] {
+  const fresh = new sqlite3.oo1.DB(":memory:") as Oo1Db;
+  try {
+    return checkSchema(d, fresh);
+  } finally {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (fresh as any).close();
+  }
 }
 
 function reopen() {
@@ -53,6 +69,7 @@ function reopen() {
   (db as any)?.close();
   db = pool ? (new pool.OpfsSAHPoolDb(DB_FILE) as Oo1Db) : (new sqlite3.oo1.DB(":memory:") as Oo1Db);
   migrate(db);
+  if (info) info.repairs = verify(db);
 }
 
 self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
@@ -62,7 +79,9 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
     if (req.op === "init") result = await open();
     else {
       if (!db) await open();
-      const d = db!;
+      const scratch = "scratch" in req && req.scratch;
+      if (scratch) scratchDb ??= new sqlite3.oo1.DB(":memory:") as Oo1Db;
+      const d = scratch ? scratchDb! : db!;
       switch (req.op) {
         case "all":
           result = oo1All(d, req.sql, req.params);
@@ -93,11 +112,11 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
               sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE | sqlite3.capi.SQLITE_DESERIALIZE_RESIZEABLE);
             if (rc) throw new Error(`sqlite3_deserialize: ${rc}`);
             migrate(db);
-            result = null;
+            result = verify(db);
             break;
           }
           reopen();
-          result = null;
+          result = info?.repairs ?? [];
           break;
         }
         case "wipe": {

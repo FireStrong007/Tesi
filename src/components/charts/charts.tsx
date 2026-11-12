@@ -121,14 +121,16 @@ function ZoomBar({ ix, label }: { ix: ChartInteraction; label: string }) {
   );
 }
 
-interface TipLine {
+export interface TipLine {
   text: string;
   color?: string;
+  /** secondary line: indented under the previous one, regular weight */
+  sub?: boolean;
 }
 
 /** Tooltip placed beside the cursor, on the side with more room, so a finger never covers it. */
 function Tooltip({ x, width, plotLeft, top, title, lines }: { x: number; width: number; plotLeft: number; top: number; title: string; lines: TipLine[] }) {
-  const chars = Math.max(title.length, ...lines.map((l) => l.text.length + (l.color ? 2 : 0)));
+  const chars = Math.max(title.length, ...lines.map((l) => l.text.length + (l.color || l.sub ? 2 : 0)));
   const tw = Math.ceil(16 + chars * 6.2);
   const th = 20 + 14 * lines.length;
   const left = Math.max(0, Math.min(x > (plotLeft + width) / 2 ? x - tw - 10 : x + 10, width - tw));
@@ -141,7 +143,7 @@ function Tooltip({ x, width, plotLeft, top, title, lines }: { x: number; width: 
       {lines.map((l, i) => (
         <g key={i}>
           {l.color && <circle cx={11} cy={24 + i * 14} r={3} fill={l.color} />}
-          <text x={l.color ? 18 : 8} y={28 + i * 14} className="fill-foreground text-[11px] font-semibold">
+          <text x={l.color || l.sub ? 18 : 8} y={28 + i * 14} className={cn("text-[11px]", l.sub ? "fill-muted-foreground" : "fill-foreground font-semibold")}>
             {l.text}
           </text>
         </g>
@@ -206,17 +208,23 @@ export interface BarItem {
   marker?: number;
   color?: string;
   segments?: { value: number; color: string }[];
+  /** extra tooltip lines (e.g. time in each stress level) */
+  details?: TipLine[];
 }
 
-/** A second daily series drawn over the bars as a line with points (e.g. the other users' average). */
+/**
+ * A second daily series drawn over the bars: a line with points (e.g. the other users' median),
+ * optionally inside a translucent band (e.g. their 25th–75th percentile).
+ */
 export interface BarOverlay {
   /** one value per bar; null = no value that day (the line breaks) */
   values: (number | null)[];
+  /** band around the line, per bar (null = no band that day) */
+  low?: (number | null)[];
+  high?: (number | null)[];
   color: string;
-  /** tooltip label of the overlay value */
-  label: string;
-  /** tooltip detail after the value, per bar (e.g. "n = 48") */
-  detail?: (i: number) => string | undefined;
+  /** tooltip lines of the overlay for bar i */
+  tip: (i: number) => TipLine[];
   /** the user's own value per bar, shown as "Tu: …" in the tooltip */
   mine?: (number | null)[];
   mineLabel?: string;
@@ -288,7 +296,7 @@ export function BarChart({
     },
   });
 
-  const top = Math.max(goal ?? 0, ...refLines.map((r) => r.value), ...items.map((i) => Math.max(i.value, i.marker ?? 0)), ...(overlay?.values ?? []).map((v) => v ?? 0));
+  const top = Math.max(goal ?? 0, ...refLines.map((r) => r.value), ...items.map((i) => Math.max(i.value, i.marker ?? 0)), ...(overlay?.values ?? []).map((v) => v ?? 0), ...(overlay?.high ?? []).map((v) => v ?? 0));
   const max = yMax ?? niceMax(top * 1.08);
   const min = yMin ?? 0;
   const y = (v: number) => padT + plotH - ((Math.max(min, v) - min) / (max - min || 1)) * plotH;
@@ -375,25 +383,51 @@ export function BarChart({
     [items, w, min, max, plotH, height, selected, showValues, labelEvery, goal, refLines, color, vf], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  // overlay: a line through the bar centres, broken where there is no value, with a halo in the
-  // card colour so it stays readable where it crosses the bars
-  const overlayLayer = useMemo(() => {
-    if (!overlay || w <= 0) return null;
+  // overlay: a translucent band (one shape per run of days with a value) and a line through the bar
+  // centres, broken where there is no value. The band's fill goes behind the bars (their colours stay
+  // true), its edges and the line on top; the line has a halo in the card colour so it stays readable
+  // where it crosses the bars.
+  const [bandFill, overlayLayer] = useMemo(() => {
+    if (!overlay || w <= 0) return [null, null];
     const cx = (i: number) => padL + i * bw + bw / 2;
     let d = "";
     overlay.values.forEach((v, i) => {
       if (v == null) return;
       d += `${i > 0 && overlay.values[i - 1] != null ? "L" : "M"}${cx(i).toFixed(1)},${y(v).toFixed(1)}`;
     });
+    const bands: { area: string; edges: string }[] = [];
+    const { low, high } = overlay;
+    if (low && high) {
+      const has = (i: number) => low[i] != null && high[i] != null;
+      const P = (x: number, v: number) => `${x.toFixed(1)},${y(v).toFixed(1)}`;
+      for (let i = 0; i < items.length; i++) {
+        if (!has(i) || (i > 0 && has(i - 1))) continue;
+        let j = i;
+        while (j + 1 < items.length && has(j + 1)) j++;
+        const run = Array.from({ length: j - i + 1 }, (_, k) => i + k);
+        // flat ends 0.4 bar wide, so a lone day is a small box rather than a vertical line
+        const upper = [P(cx(i) - bw * 0.4, high[i]!), ...run.map((k) => P(cx(k), high[k]!)), P(cx(j) + bw * 0.4, high[j]!)];
+        const lower = [P(cx(j) + bw * 0.4, low[j]!), ...[...run].reverse().map((k) => P(cx(k), low[k]!)), P(cx(i) - bw * 0.4, low[i]!)];
+        bands.push({ area: `M${upper.join("L")}L${lower.join("L")}Z`, edges: `M${upper.join("L")}M${lower.join("L")}` });
+      }
+    }
     const r = Math.max(2, Math.min(3.5, bw / 4));
-    return (
-      <g pointerEvents="none">
+    return [
+      <g key="fill" pointerEvents="none">
+        {bands.map((b, k) => (
+          <path key={k} d={b.area} fill={overlay.color} style={{ fillOpacity: "var(--compare-band, 0.16)" }} />
+        ))}
+      </g>,
+      <g key="line" pointerEvents="none">
+        {bands.map((b, k) => (
+          <path key={k} d={b.edges} fill="none" stroke={overlay.color} style={{ strokeOpacity: "var(--compare-edge, 0.55)" }} strokeWidth={1.25} strokeLinejoin="round" />
+        ))}
         <path d={d} fill="none" stroke="var(--card)" strokeWidth={4.5} strokeLinejoin="round" strokeLinecap="round" />
         <path d={d} fill="none" stroke={overlay.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
         {overlay.values.map((v, i) => (v == null ? null : <circle key={i} cx={cx(i)} cy={y(v)} r={r} fill={overlay.color} stroke="var(--card)" strokeWidth={1.5} />))}
-      </g>
-    );
-  }, [overlay, w, min, max, plotH, bw]); // eslint-disable-line react-hooks/exhaustive-deps
+      </g>,
+    ];
+  }, [overlay, items.length, w, min, max, plotH, bw]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hover = ix.hoverX !== null ? indexAt(ix.hoverX) : null;
   const hit = hover !== null ? items[hover] : null;
@@ -402,18 +436,18 @@ export function BarChart({
   if (hit && overlay) {
     const of = overlay.format ?? vf;
     const mine = overlay.mine?.[hover!];
-    const other = overlay.values[hover!];
-    const detail = overlay.detail?.(hover!);
     lines = [
       ...(overlay.keepBarLine ? lines : []),
       ...(overlay.mine ? [{ text: `${overlay.mineLabel ?? "Tu"}: ${mine != null ? of(mine) : "–"}`, color: overlay.mineColor ?? hit.color ?? color }] : []),
-      { text: `${overlay.label}: ${other != null ? of(other) : "–"}${detail ? ` · ${detail}` : ""}`, color: overlay.color },
     ];
   }
+  if (hit?.details) lines.push(...hit.details);
+  if (hit && overlay) lines.push(...overlay.tip(hover!));
   return (
     <Surface boxRef={ref} ix={ix} width={w} height={height} cursor={onSelect ? "cursor-pointer" : undefined}>
       {grid}
       {hover !== null && <rect x={padL + hover * bw} y={padT} width={bw} height={plotH} fill="color-mix(in oklch, var(--accent) 60%, transparent)" rx={4} pointerEvents="none" />}
+      {bandFill}
       {bars}
       {overlayLayer}
       {hit && <Tooltip x={padL + hover! * bw + bw / 2} width={w} plotLeft={padL} top={padT} title={hit.label} lines={lines} />}
@@ -997,12 +1031,26 @@ export function GoalRing({ value, goal, color, size = 64, stroke = 7, children }
   );
 }
 
-export function Legend({ items }: { items: { label: string; color: string; value?: string }[] }) {
+export interface LegendItem {
+  label: string;
+  color: string;
+  value?: string;
+  /** "band": a translucent band with a line through it (an overlay with its range) */
+  kind?: "band";
+}
+
+export function Legend({ items }: { items: LegendItem[] }) {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs">
       {items.map((i) => (
         <div key={i.label} className="flex items-center gap-1.5">
-          <span className="size-2.5 rounded-sm" style={{ background: i.color }} />
+          {i.kind === "band" ? (
+            <span className="relative h-2.5 w-4 shrink-0 rounded-sm" style={{ background: `color-mix(in oklch, ${i.color} 22%, transparent)` }}>
+              <span className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full" style={{ background: i.color }} />
+            </span>
+          ) : (
+            <span className="size-2.5 shrink-0 rounded-sm" style={{ background: i.color }} />
+          )}
           <span className="text-muted-foreground">{i.label}</span>
           {i.value && <span className="font-medium tabular">{i.value}</span>}
         </div>

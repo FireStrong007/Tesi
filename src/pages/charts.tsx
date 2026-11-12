@@ -33,6 +33,8 @@ import {
   niceAxisMax,
   type BarItem,
   type BarOverlay,
+  type LegendItem,
+  type TipLine,
   type Overlay,
 } from "@/components/charts/charts";
 import { DateNav, EmptyState, PageBody, PageHeader, periodRange, type Period } from "@/components/page";
@@ -40,12 +42,25 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useQuery } from "@/hooks/use-query";
-import { MIN_USERS, getComparisonSource, summarizePeriod, userDailyValues, type CompareMetric, type DailyAverage } from "@/lib/comparison";
+import {
+  MIN_USERS,
+  WEEKLY_METRICS,
+  getComparisonSource,
+  periodValue,
+  summarySentence,
+  userDailyValues,
+  weeklyTotal,
+  weeksCovering,
+  type CompareMetric,
+  type DailyDistribution,
+  type PeriodStanding,
+} from "@/lib/comparison";
 import { loadDay, type DayData } from "@/lib/day-data";
 import { sleepTotal, startOfDay, type User } from "@/lib/db/repo";
 import { fmtDay, fmtDayLong, fmtDayNum, fmtDistance, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@/lib/format";
-import { STRESS_LEVELS, STRESS_MIN_VALID, estimateBmr, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@/lib/metrics";
+import { STRESS_LEVELS, STRESS_MIN_VALID, VALID_DAY_MIN_HR_HOURS, estimateBmr, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@/lib/metrics";
 import { loadRange, type DayAgg, type RangeData } from "@/lib/range-data";
+import { userServerRange } from "@/lib/server/user-mirror";
 import { navigate, query, usePath } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { stressLabel } from "./dashboard";
@@ -65,6 +80,7 @@ const METRICS: { id: string; label: string; icon: Icon; color: string; periods: 
   { id: "intensity", label: "Intensità", icon: ZapIcon, color: "var(--calories)", periods: ["week", "month"] },
 ];
 type MetricId = string;
+type SleepMinutes = { deep: number; light: number; rem: number; awake: number };
 
 const PERIOD_LABEL: Record<Period, string> = { day: "Giorno", week: "Settimana", month: "Mese" };
 
@@ -88,7 +104,7 @@ export function ChartsPage() {
     if (n.get("tab") !== tab || n.get("period") !== period) setCompareOn(null);
     navigate(`/charts?${n.toString()}`, true);
   };
-  const openDay = (d: number) => set({ day: d, period: "day" });
+  const openDay = (d: number, p: Period = "day") => set({ day: d, period: p });
 
   return (
     <>
@@ -648,36 +664,79 @@ function RangeView({
   tab: MetricId;
   day: number;
   period: Period;
-  onOpenDay: (d: number) => void;
+  onOpenDay: (d: number, p?: Period) => void;
   compare: boolean;
   onCompare: (on: boolean) => void;
 }) {
   const { db, user } = useApp();
-  const { from, to } = periodRange(period, day);
+  const range = periodRange(period, day);
+  // the month of intensity minutes is shown in whole Monday–Sunday weeks
+  const weekly = tab === "intensity" && period === "month";
+  const weeks = weekly ? weeksCovering(range.from, range.to) : null;
+  const from = weeks ? weeks[0].start : range.from;
+  const to = weeks ? weeks[weeks.length - 1].end : range.to;
   const { data: r } = useQuery(() => loadRange(db, user.id, from, to), [from, to, user.id]);
   const labelOf = (d: number) => (period === "week" ? fmtWeekday(d).toUpperCase() : fmtDayNum(d));
   const common = {
-    labelEvery: period === "month" ? 5 : 1,
-    onSelect: (k: string | number) => onOpenDay(Number(k)),
-    showValues: period === "week",
+    labelEvery: period === "month" && !weekly ? 5 : 1,
+    onSelect: (k: string | number) => onOpenDay(Number(k), weekly ? "week" : "day"),
+    showValues: period === "week" || weekly,
     height: 260,
   };
   const title = `${fmtDay(from)} – ${fmtDay(addDaysLocal(to, -1))}`;
-  const base = useMemo(() => (r ? buildRange(tab, r, user, labelOf) : null), [r, tab, user, period]); // eslint-disable-line react-hooks/exhaustive-deps
+  const base = useMemo(() => (r ? buildRange(tab, r, user, labelOf, { period }) : null), [r, tab, user, period]); // eslint-disable-line react-hooks/exhaustive-deps
   // comparison with the other users: only where configured, SpO2/HRV only when the user has data
   const cfg = COMPARE_PERIODS.includes(period) ? COMPARE[tab] : undefined;
   const canCompare = !!cfg && !!base && (!cfg.onlyWithData || base.hasData);
   const active = compare && canCompare;
   const source = getComparisonSource();
-  const { data: avg } = useQuery<DailyAverage[] | null>(
-    () => (active && cfg ? source.dailyAverages(cfg.metric, from, to, { excludeUserId: String(user.id) }) : Promise.resolve(null)),
+  // the demo profile asks too, but its values are never counted nor stored (see ComparisonQuery)
+  const query = { excludeUserId: String(user.id), isDemo: !!user.is_demo };
+  const { data: dist } = useQuery<DailyDistribution[] | null>(
+    () =>
+      active && cfg
+        ? WEEKLY_METRICS.has(cfg.metric)
+          ? source.weeklyDistribution(cfg.metric, from, to, query)
+          : source.dailyDistribution(cfg.metric, from, to, query)
+        : Promise.resolve(null),
     [active, cfg?.metric, from, to, user.id],
   );
-  const view = useMemo(() => (r && active && tab === "stress" ? buildRange(tab, r, user, labelOf, { stressAverage: true }) : base), [r, active, tab, user, period, base]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the user's values for the comparison come from their FIT files in the server's format, read
+  // like every other participant's: "Tu" and the others share the same rules and limits (the bars
+  // keep the app's own values)
+  const { data: mineRange } = useQuery(
+    () => (active ? userServerRange(db, db.scratch(), user.id, from, to) : Promise.resolve(null)),
+    [active, from, to, user.id],
+  );
+  const now = Math.floor(Date.now() / 1000);
+  const mineDaily = useMemo(() => (mineRange && cfg ? userDailyValues(cfg.metric, mineRange) : null), [mineRange, cfg]);
+  const minePeriod = mineDaily && cfg && mineRange ? periodValue(cfg.metric, mineRange.days, mineDaily, now) : null;
+  const { data: standing } = useQuery<PeriodStanding | null>(
+    () => (active && cfg && minePeriod ? source.periodStanding(cfg.metric, from, to, minePeriod.value, query) : Promise.resolve(null)),
+    [active, cfg?.metric, from, to, user.id, minePeriod?.value],
+  );
+  // comparing only adds the overlay; the one exception is sleep, where the awake time is not stacked
+  // so that the top of the bar is the compared value (time asleep)
+  const view = useMemo(() => (r && active ? buildRange(tab, r, user, labelOf, { period, compare: true }) : base), [r, active, tab, user, period, base]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!r || !view) return <Loading />;
   const compareButton = canCompare ? <CompareButton on={active} onToggle={() => onCompare(!compare)} /> : null;
   if (!view.hasData && !active) return <NoData action={compareButton} />;
-  const cmp = active && cfg ? comparisonView(cfg, r, avg?.length === r.days.length ? avg : null, period, METRICS.find((m) => m.id === tab)!.color) : null;
+  // the user's dot in the tooltip: the metric's colour, or each bar's own where bars are coloured by value (stress)
+  const mineColor = tab === "stress" ? undefined : METRICS.find((m) => m.id === tab)!.color;
+  const cmp =
+    active && cfg && mineDaily && minePeriod
+      ? comparisonView(cfg, {
+          r,
+          dist: dist?.length === view.items.length ? dist : null,
+          standing: standing ?? null,
+          mine: weeks ? weeks.map((w) => weeklyTotal(r.days, mineDaily, w, now)) : mineDaily,
+          minePeriod,
+          span: weeks ? `Ultime ${weeks.filter((w) => w.end <= startOfDay(now)).length} settimane` : PERIOD_SPAN[period],
+          mineColor,
+        })
+      : null;
+  // a fixed axis (e.g. sleep hours) grows when the others' band goes above it
+  const yMax = cmp?.top != null && view.yMax != null && view.fitYMax && cmp.top > view.yMax ? view.fitYMax(cmp.top) : view.yMax;
   return (
     <MetricLayout
       summary={
@@ -694,14 +753,14 @@ function RangeView({
           format={view.axis}
           valueFormat={view.valueFormat}
           yMin={view.yMin}
-          yMax={view.yMax}
+          yMax={yMax}
           overlay={cmp?.overlay}
           {...common}
         />
         {view.legend && <Legend items={view.legend} />}
         {cmp && (
           <div className="space-y-1.5 border-t pt-3">
-            <Legend items={cmp.legend} />
+            <Legend items={[cmp.legend]} />
             <p className="text-sm">{cmp.summary}</p>
             {source.sample && <p className="text-muted-foreground text-[11px]">dati di confronto di esempio</p>}
           </div>
@@ -730,8 +789,6 @@ interface CompareConfig {
   keepBarLine?: boolean;
   /** offer it only when the user has data (not every band measures it) */
   onlyWithData?: boolean;
-  /** bars coloured by value: the user's colour follows their average (and each bar's colour in the tooltip) */
-  colorOf?: (v: number) => string;
 }
 
 const COMPARE: Partial<Record<MetricId, CompareConfig>> = {
@@ -739,12 +796,12 @@ const COMPARE: Partial<Record<MetricId, CompareConfig>> = {
   calories: { metric: "calories", text: (v) => `${fmtInt(v)} kcal attive/giorno`, fmt: (v) => `${fmtInt(v)} kcal` },
   sleep: { metric: "sleep", text: (v) => `${fmtMinutes(v)} di sonno a notte`, fmt: fmtMinutes, mineLabel: "Tu (sonno)" },
   hr: { metric: "resting_hr", text: (v) => `${fmtInt(v)} bpm a riposo`, fmt: (v) => `${fmtInt(v)} bpm`, mineLabel: "Tu, a riposo", keepBarLine: true },
-  stress: { metric: "stress", text: (v) => `stress medio ${fmtInt(v)}`, fmt: fmtInt, colorOf: (v) => stressLevelOf(v).color },
+  stress: { metric: "stress", text: (v) => `stress medio ${fmtInt(v)}`, fmt: fmtInt },
   energy: { metric: "body_battery", text: (v) => `Body Battery massima ${fmtInt(v)}`, fmt: fmtInt, mineLabel: "Tu, massimo", keepBarLine: true },
   spo2: { metric: "spo2", text: (v) => `SpO₂ media ${fmtInt(v)}%`, fmt: (v) => `${fmtInt(v)}%`, onlyWithData: true },
   resp: { metric: "respiration", text: (v) => `${fmt1(v)} resp/min`, fmt: fmt1 },
   hrv: { metric: "hrv", text: (v) => `HRV ${fmtInt(v)} ms`, fmt: (v) => `${fmtInt(v)} ms`, onlyWithData: true },
-  intensity: { metric: "intensity", text: (v) => `${fmtInt(v)} min di intensità/giorno`, fmt: (v) => `${fmtInt(v)} min` },
+  intensity: { metric: "intensity", text: (v) => `${fmtInt(v)} min di intensità/settimana`, fmt: (v) => `${fmtInt(v)} min` },
 };
 
 function CompareButton({ on, onToggle }: { on: boolean; onToggle: () => void }) {
@@ -763,42 +820,63 @@ function CompareButton({ on, onToggle }: { on: boolean; onToggle: () => void }) 
   );
 }
 
-/** Overlay, legend and summary line of the comparison (avg null = still loading). */
-function comparisonView(cfg: CompareConfig, r: RangeData, avg: DailyAverage[] | null, period: Period, myColor: string) {
-  const mine = userDailyValues(cfg.metric, r);
-  const own = summarizePeriod(mine, mine).mine;
-  if (cfg.colorOf && own != null) myColor = cfg.colorOf(own);
-  if (!avg) return { overlay: undefined, legend: [{ label: "Tu", color: myColor }], summary: "Caricamento del confronto…" };
-  const counts = avg.filter((a) => a.mean != null).map((a) => a.n);
-  const n = counts.length ? (Math.min(...counts) === Math.max(...counts) ? `n = ${counts[0]}` : `n = ${Math.min(...counts)}–${Math.max(...counts)}`) : "n < 5";
+/** The others' median, central band and sample size for the tooltip. */
+function othersTip(d: DailyDistribution, fmt: (v: number) => string): TipLine[] {
+  if (d.median == null) return [{ text: `Altri: ${d.n ? `meno di ${MIN_USERS} utenti` : "nessun dato"}`, color: "var(--compare)" }];
+  return [
+    { text: `Altri: mediana ${fmt(d.median)}`, color: "var(--compare)" },
+    { text: `metà degli utenti tra ${fmt(d.p25!)} e ${fmt(d.p75!)}`, sub: true },
+    { text: `n = ${d.n}`, sub: true },
+  ];
+}
+
+/**
+ * Overlay, legend entry and summary line of the comparison (dist / standing null = still loading).
+ * `mine` has one value per bar (days, or weekly totals); `minePeriod` is the user's value for the
+ * whole period and their valid days.
+ */
+function comparisonView(
+  cfg: CompareConfig,
+  a: {
+    r: RangeData;
+    dist: DailyDistribution[] | null;
+    standing: PeriodStanding | null;
+    mine: (number | null)[];
+    minePeriod: { value: number | null; days: number };
+    span: string;
+    mineColor?: string;
+  },
+) {
+  const { dist, standing, mine, mineColor } = a;
+  const legend: LegendItem = { label: "Altri utenti: mediana e fascia centrale (50%)", color: "var(--compare)", kind: "band" };
+  if (!dist) return { overlay: undefined, legend, summary: "Caricamento del confronto…", top: null };
   const overlay: BarOverlay = {
-    values: avg.map((a) => a.mean),
+    values: dist.map((d) => d.median),
+    low: dist.map((d) => d.p25),
+    high: dist.map((d) => d.p75),
     color: "var(--compare)",
-    label: "Altri",
-    detail: (i) => (avg[i].mean != null ? `n = ${avg[i].n}` : avg[i].n ? `meno di ${MIN_USERS} utenti` : undefined),
+    tip: (i) => othersTip(dist[i], cfg.fmt),
     mine,
     mineLabel: cfg.mineLabel,
-    mineColor: cfg.colorOf ? undefined : myColor,
+    mineColor,
     keepBarLine: cfg.keepBarLine,
     format: cfg.fmt,
   };
-  const s = summarizePeriod(mine, avg.map((a) => a.mean));
-  const pct = s.diff != null ? Math.round(s.diff * 100) : null;
-  const diff = pct == null ? "" : ` (${pct > 0 ? "+" : pct < 0 ? "−" : "±"}${Math.abs(pct)}%)`;
-  const summary =
-    s.others == null
-      ? `${PERIOD_SPAN[period]}: troppo pochi utenti per una media`
-      : s.mine == null
-        ? `${PERIOD_SPAN[period]}: media altri utenti ${cfg.text(s.others)}`
-        : `${PERIOD_SPAN[period]}: ${cfg.text(s.mine)}, media altri utenti ${cfg.fmt(s.others)}${diff}`;
+  const highs = dist.map((d) => d.p75).filter((v): v is number => v != null);
   return {
     overlay,
-    legend: [
-      { label: "Tu", color: myColor },
-      { label: `Media altri utenti (${n})`, color: "var(--compare)" },
-    ],
-    summary,
+    legend,
+    summary: standing
+      ? summarySentence({ span: a.span, mine: a.minePeriod.value, myDays: a.minePeriod.days, standing, text: cfg.text, fmt: cfg.fmt })
+      : "Caricamento del confronto…",
+    top: highs.length ? Math.max(...highs) : null,
   };
+}
+
+/** Tooltip note for a day the band was hardly worn: it does not count in averages and comparisons. */
+function invalidNote(r: RangeData, i: number): TipLine[] | undefined {
+  if (r.valid[i] || r.days[i] >= startOfDay(Date.now() / 1000)) return undefined;
+  return [{ text: `Indossato ${r.hrHours[i]} h su ${VALID_DAY_MIN_HR_HOURS}: escluso dalle medie`, sub: true }];
 }
 
 const addDaysLocal = (d: number, n: number) => {
@@ -816,12 +894,14 @@ interface RangeViewSpec {
   chartDescription?: string;
   items: BarItem[];
   goal?: number;
-  /** `average`: the user's own average line, hidden while comparing (the summary line states it) */
+  /** `average`: the user's own average, hidden while comparing (it overlaps the others' band) */
   refLines?: { value: number; color: string; label?: string; average?: boolean }[];
   axis: (v: number) => string;
   valueFormat?: (v: number) => string;
   yMin?: number;
   yMax?: number;
+  /** a fixed yMax that has to make room for a higher overlay value */
+  fitYMax?: (top: number) => number;
   legend?: { label: string; color: string }[];
   extra?: ReactNode;
 }
@@ -832,7 +912,7 @@ const hFmt = (v: number) => `${Math.round(v / 60)}h`;
 const hourAxis = (maxMin: number, stepMin: number) => Math.max(stepMin, Math.ceil((maxMin * 1.05) / stepMin) * stepMin);
 const avgOf = (vals: number[]) => (vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null);
 
-function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number) => string, opts: { stressAverage?: boolean } = {}): RangeViewSpec {
+function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number) => string, opts: { period: Period; compare?: boolean }): RangeViewSpec {
   const n = r.days.length;
   const aggItems = (a: DayAgg[], k: "avg" | "max" | "min", color: string): BarItem[] => a.map((x) => ({ key: x.day, label: labelOf(x.day), value: x[k] ?? 0, color }));
   const minMaxItems = (a: DayAgg[], color: string, marker?: (i: number) => number | undefined): BarItem[] =>
@@ -851,8 +931,9 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
     case "steps": {
       const total = r.totals.reduce((s, t) => s + t.steps, 0);
       const dist = r.totals.reduce((s, t) => s + t.distance_m, 0);
-      const active = r.totals.filter((t) => t.steps > 0);
-      const avg = active.length ? total / active.length : 0;
+      // averages over the valid days only: a day without the band is not a day with 0 steps
+      const active = r.totals.filter((_, i) => r.valid[i]);
+      const avg = active.length ? active.reduce((s, t) => s + t.steps, 0) / active.length : 0;
       return {
         hasData: total > 0,
         subtitle: `Passi mancanti: ${fmtInt(remaining(user.step_goal, n, total))}`,
@@ -860,11 +941,17 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
         tiles: [
           { label: "Passi totali", value: fmtInt(total), color: "var(--steps)" },
           { label: "Obiettivo raggiunto", value: `${r.totals.filter((t) => t.steps >= user.step_goal).length}/${n}`, unit: "giorni" },
-          { label: "Distanza media", value: fmtDistance(active.length ? dist / active.length : 0) },
+          { label: "Distanza media", value: fmtDistance(active.length ? active.reduce((s, t) => s + t.distance_m, 0) / active.length : 0) },
           { label: "Distanza totale", value: fmtDistance(dist) },
         ],
         chartTitle: "Passi al giorno",
-        items: r.totals.map((t) => ({ key: t.day, label: labelOf(t.day), value: t.steps, color: t.steps >= user.step_goal ? "var(--steps)" : "color-mix(in oklch, var(--steps) 60%, var(--muted))" })),
+        items: r.totals.map((t, i) => ({
+          key: t.day,
+          label: labelOf(t.day),
+          value: t.steps,
+          color: t.steps >= user.step_goal ? "var(--steps)" : "color-mix(in oklch, var(--steps) 60%, var(--muted))",
+          details: invalidNote(r, i),
+        })),
         goal: user.step_goal,
         refLines: avg ? [{ value: avg, color: "var(--muted-foreground)", label: "Media", average: true }] : [],
         axis: kFmt,
@@ -874,7 +961,8 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
 
     case "calories": {
       const activeTot = r.totals.reduce((s, t) => s + t.calories, 0);
-      const withData = r.totals.filter((t) => t.calories > 0 || t.steps > 0);
+      const withData = r.totals.filter((t, i) => r.valid[i] || (r.days[i] >= startOfDay(Date.now() / 1000) && (t.calories > 0 || t.steps > 0)));
+      const validDays = r.totals.filter((_, i) => r.valid[i]);
       const now = Date.now() / 1000;
       const bmrs = r.rmr.map((v) => v ?? estimateBmr(user));
       const restTot = r.days.reduce((s, d, i) => s + (withData.some((t) => t.day === d) ? restingCalories(bmrs[i], d, addDaysLocal(d, 1), now) : 0), 0);
@@ -888,13 +976,13 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
           </SegmentRing>
         ),
         tiles: [
-          { label: "Media attive", value: fmtInt(withData.length ? activeTot / withData.length : 0), unit: "kcal", color: "var(--calories)" },
+          { label: "Media attive", value: fmtInt(validDays.length ? validDays.reduce((s, t) => s + t.calories, 0) / validDays.length : 0), unit: "kcal", color: "var(--calories)" },
           { label: "Totale attive", value: fmtInt(activeTot), unit: "kcal", color: "var(--calories)" },
           { label: "Metabolismo basale", value: fmtInt(lastBmr), unit: "kcal/g", color: "var(--rmr)" },
           { label: "Totale a riposo", value: fmtInt(restTot), unit: "kcal", color: "var(--rmr)" },
         ],
         chartTitle: "Calorie attive al giorno",
-        items: r.totals.map((t) => ({ key: t.day, label: labelOf(t.day), value: t.calories, color: "var(--calories)" })),
+        items: r.totals.map((t, i) => ({ key: t.day, label: labelOf(t.day), value: t.calories, color: "var(--calories)", details: invalidNote(r, i) })),
         goal: user.calories_goal,
         axis: (v) => fmtInt(v),
       };
@@ -906,6 +994,11 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
       const avg = avgOf(nights.filter((x): x is number => x != null));
       const avgStage = (k: "deep" | "light" | "rem" | "awake") => avgOf(withData.map((s) => s.minutes[k])) ?? 0;
       const scores = r.sleep.map((s, i) => (s?.score != null ? { timestamp: r.days[i] + 12 * 3600, value: s.score } : null)).filter(Boolean) as { timestamp: number; value: number }[];
+      // comparing: the awake time is not stacked (the top of the bar is the time asleep, the compared
+      // value) and moves to the tooltip
+      const stacked = (m: SleepMinutes) => stageMinutes(m).filter((x) => !opts.compare || x.label !== "Sveglio");
+      const barOf = (s: NonNullable<RangeData["sleep"][number]>) => sleepTotal(s) + (opts.compare ? 0 : s.minutes.awake);
+      const axisOf = (top: number) => hourAxis(Math.max(user.sleep_goal_min, top, ...withData.map(barOf)), 120);
       return {
         hasData: withData.length > 0,
         subtitle: `Debito di sonno: ${fmtMinutes(sleepDebt(nights, user.sleep_goal_min))}`,
@@ -921,16 +1014,18 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
           return {
             key: d,
             label: labelOf(d),
-            value: s ? sleepTotal(s) + s.minutes.awake : 0,
-            segments: s ? stageMinutes(s.minutes).map((x) => ({ value: x.value, color: x.color })) : [],
+            value: s ? barOf(s) : 0,
+            segments: s ? stacked(s.minutes).map((x) => ({ value: x.value, color: x.color })) : [],
+            details: s && opts.compare ? [{ text: `Sveglio ${fmtMinutes(s.minutes.awake)}`, color: STAGE_COLOR[1], sub: true }] : undefined,
           };
         }),
         goal: user.sleep_goal_min,
         refLines: avg ? [{ value: avg, color: "var(--heart)", label: `Media ${fmtMinutes(avg)}`, average: true }] : [],
         axis: hFmt,
-        yMax: hourAxis(Math.max(user.sleep_goal_min, ...withData.map((x) => sleepTotal(x) + x.minutes.awake)), 120),
+        yMax: axisOf(0),
+        fitYMax: axisOf,
         valueFormat: (v) => fmtMinutes(v),
-        legend: stageMinutes({ deep: 0, light: 0, rem: 0, awake: 0 }).map((x) => ({ label: x.label, color: x.color })),
+        legend: stacked({ deep: 0, light: 0, rem: 0, awake: 0 }).map((x) => ({ label: x.label, color: x.color })),
         extra: scores.length ? (
           <ChartCard title="Punteggio del sonno">
             <TimeChart from={r.days[0]} to={addDaysLocal(r.days[n - 1], 1)} yMin={0} yMax={100} height={170} xTicks="days" series={[{ points: scores, color: "var(--sleep-deep)", dots: true, label: "" }]} />
@@ -952,7 +1047,8 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
           { label: "Riposo più basso", value: fmtInt(rest.length ? Math.min(...rest) : null), unit: "bpm" },
         ],
         chartTitle: "Battito: minimo e massimo per giorno (il punto è il battito a riposo)",
-        items: minMaxItems(r.hr, "color-mix(in oklch, var(--heart) 75%, transparent)", (i) => r.resting[i].min ?? undefined),
+        // comparing: fainter min–max bars, so that the resting dots and the others' band stand out
+        items: minMaxItems(r.hr, `color-mix(in oklch, var(--heart) ${opts.compare ? 35 : 75}%, transparent)`, (i) => r.resting[i].min ?? undefined),
         axis: (v) => fmtInt(v),
         yMin: 40,
       };
@@ -962,22 +1058,30 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
       const tot: Record<StressKey, number> = { rest: 0, low: 0, medium: 0, high: 0 };
       r.stressByLevel.forEach((m) => STRESS_LEVELS.forEach((l) => (tot[l.key] += m[l.key])));
       const s = summaryOf(r.stress);
-      // comparing: average stress per day (bars coloured by level), the unit of the others' average
-      const byDay = opts.stressAverage
-        ? {
-            chartTitle: "Stress medio al giorno",
-            chartDescription: "Con «Confronta» il grafico mostra il livello medio di stress di ogni giorno (0–100) invece delle ore in ogni fascia, per confrontarlo con gli altri utenti.",
-            yMax: 100,
-            items: r.days.map((d, i) => {
-              const v = r.stress[i].count ? r.stress[i].avg! : 0;
-              return { key: d, label: labelOf(d), value: v, color: v ? stressLevelOf(v).color : "var(--muted)" };
-            }),
-            axis: (v: number) => fmtInt(v),
-            valueFormat: (v: number) => fmtInt(v),
-            // the bands legend describes the minutes chart, not this one
-            legend: undefined,
-          }
-        : null;
+      // month: the average of each day (bars coloured by its level), the time in each level in the
+      // tooltip; week: the time in each level, stacked
+      const byDay =
+        opts.period === "month"
+          ? {
+              chartTitle: "Stress medio al giorno",
+              chartDescription: "Media di ogni giorno (0–100), colorata secondo la fascia. Il dettaglio della barra mostra il tempo in ogni fascia.",
+              yMax: 100,
+              items: r.days.map((d, i) => {
+                const v = r.stress[i].count ? r.stress[i].avg! : 0;
+                return {
+                  key: d,
+                  label: labelOf(d),
+                  value: v,
+                  color: v ? stressLevelOf(v).color : "var(--muted)",
+                  details: STRESS_LEVELS.filter((l) => r.stressByLevel[i][l.key] > 0).map((l) => ({ text: `${l.label} ${fmtMinutes(r.stressByLevel[i][l.key])}`, color: l.color, sub: true })),
+                };
+              }),
+              axis: (v: number) => fmtInt(v),
+              valueFormat: (v: number) => `Media ${fmtInt(v)}`,
+              // comparing: the legend row is the comparison's (the user asked for the bands to go)
+              legend: opts.compare ? undefined : STRESS_LEVELS.map((l) => ({ label: l.label, color: l.color })),
+            }
+          : null;
       return {
         hasData: s.days > 0,
         subtitle: stressLabel(s.avg),
@@ -1069,7 +1173,7 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
     case "intensity": {
       const tot = r.intensity.reduce((s, x) => s + intensityScore(x.moderate, x.vigorous), 0);
       const weeklyGoal = user.active_minutes_goal;
-      return {
+      const head = {
         hasData: tot > 0,
         subtitle: `Obiettivo settimanale: ${fmtInt(weeklyGoal)} minuti`,
         gauge: (
@@ -1081,6 +1185,39 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
           { label: "Moderati", value: fmtInt(r.intensity.reduce((s, x) => s + x.moderate, 0)), unit: "min", color: "var(--steps)" },
           { label: "Intensi (contano doppio)", value: fmtInt(r.intensity.reduce((s, x) => s + x.vigorous, 0)), unit: "min", color: "var(--calories)" },
         ],
+        axis: (v: number) => fmtInt(v),
+        legend: [
+          { label: "Moderata", color: "var(--steps)" },
+          { label: "Intensa (×2)", color: "var(--calories)" },
+        ],
+      };
+      if (opts.period === "month") {
+        // whole Monday–Sunday weeks (the range was grown to them), goal per week
+        const weeks = weeksCovering(r.days[0], addDaysLocal(r.days[n - 1], 1));
+        return {
+          ...head,
+          chartTitle: "Minuti di intensità per settimana",
+          chartDescription: "Settimane da lunedì a domenica: moderati + 2 × intensi. Tocca o clicca una barra per aprire la settimana.",
+          items: weeks.map((w) => {
+            const inWeek = r.intensity.filter((x) => x.day >= w.start && x.day < w.end);
+            const moderate = inWeek.reduce((s, x) => s + x.moderate, 0);
+            const vigorous = inWeek.reduce((s, x) => s + x.vigorous, 0);
+            return {
+              key: w.start,
+              label: `${new Date(w.start * 1000).getDate()}/${new Date(w.start * 1000).getMonth() + 1}`,
+              value: intensityScore(moderate, vigorous),
+              segments: [
+                { value: moderate, color: "var(--steps)" },
+                { value: 2 * vigorous, color: "var(--calories)" },
+              ],
+              details: [{ text: `${fmtDay(w.start)} – ${fmtDay(addDaysLocal(w.end, -1))}`, sub: true }],
+            };
+          }),
+          goal: weeklyGoal,
+        };
+      }
+      return {
+        ...head,
         chartTitle: "Minuti di intensità al giorno",
         items: r.intensity.map((x) => ({
           key: x.day,
@@ -1092,11 +1229,6 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
           ],
         })),
         goal: Math.round(weeklyGoal / 7),
-        axis: (v) => fmtInt(v),
-        legend: [
-          { label: "Moderata", color: "var(--steps)" },
-          { label: "Intensa (×2)", color: "var(--calories)" },
-        ],
       };
     }
 

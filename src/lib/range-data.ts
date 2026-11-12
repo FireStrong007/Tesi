@@ -1,5 +1,5 @@
 /** Per-day aggregates for the week / month views. */
-import { STRESS_MIN_VALID, stressMinutes, type StressKey } from "./metrics";
+import { STRESS_MIN_VALID, isValidDay, stressMinutes, type StressKey } from "./metrics";
 import { COVERAGE_SQL, addDays, dailyTotals, stressSamples, hrvSummaries, intensityMinutes, sleepSessions, startOfDay, type DayTotals, type HrvSummary, type SleepSession } from "./db/repo";
 import type { SqlExecutor } from "./db/sql";
 
@@ -73,6 +73,28 @@ export interface RangeData {
   stressByLevel: Record<StressKey, number>[];
   /** resting metabolic rate per day (kcal/day): last value reported by the band up to that day */
   rmr: (number | null)[];
+  /** distinct hours with a heart rate reading, per day (band worn) */
+  hrHours: number[];
+  /** day worn long enough to count in averages and comparisons (metrics.isValidDay) */
+  valid: boolean[];
+}
+
+/** Distinct hours with a heart rate reading per local day (synced data + live minutes not synced yet). */
+export async function heartRateHours(db: SqlExecutor, userId: number, from: number, to: number): Promise<number[]> {
+  const rows = await db.all<{ h: number }>(
+    `SELECT timestamp / 3600 AS h FROM activity_sample WHERE user_id = ?1 AND timestamp >= ?2 AND timestamp < ?3 AND heart_rate > 0
+     UNION
+     SELECT timestamp / 3600 AS h FROM live_sample WHERE user_id = ?1 AND timestamp >= ?2 AND timestamp < ?3 AND heart_rate > 0 AND timestamp > ${COVERAGE_SQL}`,
+    [userId, from, to],
+  );
+  const perDay = new Map<number, number>();
+  for (const r of rows) {
+    const d = startOfDay(r.h * 3600);
+    perDay.set(d, (perDay.get(d) ?? 0) + 1);
+  }
+  const out: number[] = [];
+  for (let d = from; d < to; d = addDays(d, 1)) out.push(perDay.get(d) ?? 0);
+  return out;
 }
 
 export async function loadRange(db: SqlExecutor, userId: number, from: number, to: number): Promise<RangeData> {
@@ -94,9 +116,10 @@ export async function loadRange(db: SqlExecutor, userId: number, from: number, t
     liveStats(db, "body_battery", userId, from, to),
     liveStats(db, "respiration", userId, from, to),
   ]);
-  const [stressRows, rmrRows] = await Promise.all([
+  const [stressRows, rmrRows, hrHours] = await Promise.all([
     stressSamples(db, userId, from, to),
     db.all<{ timestamp: number; rate: number }>("SELECT timestamp, rate FROM resting_metabolic_rate_sample WHERE user_id = ? AND timestamp < ? ORDER BY timestamp", [userId, to]),
+    heartRateHours(db, userId, from, to),
   ]);
   const stressByLevel = days.map((d) => stressMinutes(stressRows.filter((r) => r.timestamp >= d && r.timestamp < addDays(d, 1))));
   const rmr = days.map((d) => {
@@ -117,5 +140,5 @@ export async function loadRange(db: SqlExecutor, userId: number, from: number, t
     const rows = im.filter((r) => startOfDay(r.timestamp) === d);
     return { day: d, moderate: rows.reduce((s, r) => s + r.moderate, 0), vigorous: rows.reduce((s, r) => s + r.vigorous, 0) };
   });
-  return { days, totals, sleep: sleepByDay, hr, resting, stress, energy, spo2, resp, hrv: hrvByDay, intensity, stressByLevel, rmr };
+  return { days, totals, sleep: sleepByDay, hr, resting, stress, energy, spo2, resp, hrv: hrvByDay, intensity, stressByLevel, rmr, hrHours, valid: hrHours.map(isValidDay) };
 }

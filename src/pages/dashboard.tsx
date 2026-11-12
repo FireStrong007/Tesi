@@ -60,7 +60,7 @@ function Tile({ icon, label, color, value, unit, sub, onClick, children, live }:
 }
 
 export function DashboardPage() {
-  const { db, user, devices, manager } = useApp();
+  const { db, user, devices, manager, openDemo } = useApp();
   const live = useLive();
   const [day, setDay] = useState(() => startOfDay(Date.now() / 1000));
   const { data: d } = useQuery(() => loadDay(db, user.id, day), [day, user.id]);
@@ -106,7 +106,7 @@ export function DashboardPage() {
                 <Button onClick={() => navigate("/devices?pair=1")}>
                   <PlusIcon /> Aggiungi dispositivo
                 </Button>
-                <Button variant="outline" onClick={() => void manager.addDemo()}>
+                <Button variant="outline" onClick={() => void openDemo()}>
                   Prova la demo
                 </Button>
                 <Button variant="ghost" onClick={() => navigate("/settings")}>

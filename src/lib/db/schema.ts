@@ -6,7 +6,14 @@
  * same schema works for a single local user and, later, for a multi-patient
  * database opened by a doctor.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 7;
+
+/** Tables whose rows carry both device_id and user_id (moved along with their device). */
+const USER_TABLES = [
+  "activity_sample", "stress_sample", "body_energy_sample", "spo2_sample", "respiratory_rate_sample", "resting_hr_sample",
+  "sleep_stage_sample", "sleep_stats_sample", "sleep_restless_sample", "nap_sample", "hrv_summary_sample", "hrv_value_sample",
+  "intensity_minutes_sample", "resting_metabolic_rate_sample", "workout", "live_sample", "sleep_session",
+];
 
 export const MIGRATIONS: string[] = [
   /* v1 */ `
@@ -222,6 +229,29 @@ export const MIGRATIONS: string[] = [
     ascent_m REAL, descent_m REAL, lap_trigger INTEGER,
     PRIMARY KEY (workout_id, idx)) WITHOUT ROWID;
   ALTER TABLE workout_record ADD COLUMN temperature REAL;
+  `,
+  /* v6: the demo gets its own user, flagged is_demo, so simulated data never adds up with a real
+     band's and never enters comparisons or uploads. Existing demo devices move there with all
+     their rows. workout_lap is created again for databases that reached v5 without it (the
+     startup schema check, checkSchema, repairs any other missing table or column). */ `
+  ALTER TABLE user ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0;
+  INSERT INTO user (name, is_demo) SELECT 'Demo', 1 WHERE EXISTS (SELECT 1 FROM device WHERE is_demo = 1);
+  UPDATE device SET user_id = (SELECT MAX(id) FROM user WHERE is_demo = 1) WHERE is_demo = 1;
+${USER_TABLES.map((t) => `  UPDATE ${t} SET user_id = (SELECT user_id FROM device WHERE device.id = ${t}.device_id) WHERE device_id IN (SELECT id FROM device WHERE is_demo = 1);`).join("\n")}
+  CREATE TABLE IF NOT EXISTS workout_lap (
+    workout_id INTEGER NOT NULL REFERENCES workout(id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    start_time INTEGER NOT NULL,
+    elapsed_s REAL, timer_s REAL, distance_m REAL, calories INTEGER,
+    avg_speed REAL, max_speed REAL, avg_hr INTEGER, max_hr INTEGER, avg_cadence REAL, max_cadence REAL,
+    ascent_m REAL, descent_m REAL, lap_trigger INTEGER,
+    PRIMARY KEY (workout_id, idx)) WITHOUT ROWID;
+  `,
+  /* v7: the band's day counters now restart at the band's midnight (they were carried over to the
+     next day, losing the first values of an activity type after midnight). Stored data is
+     recomputed once from the kept FIT files at the next start (DeviceManager.runPendingReprocess). */ `
+  INSERT OR REPLACE INTO meta (key, value) SELECT 'reprocess_pending', 'contatori azzerati alla mezzanotte del bracciale'
+    WHERE EXISTS (SELECT 1 FROM fit_file);
   `,
 ];
 

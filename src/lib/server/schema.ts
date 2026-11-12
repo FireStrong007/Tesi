@@ -1,0 +1,249 @@
+/**
+ * The research server's database, as given by the professor: participants, their bands, the data
+ * collection requests and Gadgetbridge's own Garmin tables (same names, columns and units as in
+ * Gadgetbridge). One database may hold every participant, or each participant may have their own:
+ * the code in this folder works with any number of databases.
+ *
+ * Units (verified on Gadgetbridge's FitImporter and on a real export):
+ *  - TIMESTAMP is in SECONDS in GARMIN_ACTIVITY_SAMPLE and BATTERY_LEVEL, in MILLISECONDS in every
+ *    other GARMIN_* table and in BASE_ACTIVITY_SUMMARY.START_TIME / END_TIME;
+ *  - a missing value is -1 (ActivitySample.NOT_MEASURED);
+ *  - GARMIN_ACTIVITY_SAMPLE.STEPS / DISTANCE_CM / ACTIVE_CALORIES are cumulative day counters summed
+ *    over every activity type (steps = cycles x 2), not per-minute values.
+ */
+export const SERVER_SCHEMA = `
+CREATE TABLE IF NOT EXISTS participant (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    birthday INTEGER,
+    gender INTEGER,
+    api_key_hash TEXT NOT NULL UNIQUE,
+    fcm_token TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS device (
+    id INTEGER PRIMARY KEY,
+    participant_id INTEGER NOT NULL REFERENCES participant(id),
+    identifier TEXT NOT NULL,
+    name TEXT NOT NULL,
+    manufacturer TEXT NOT NULL,
+    type INTEGER NOT NULL,
+    type_name TEXT NOT NULL,
+    model TEXT,
+    last_measurement_at INTEGER,
+    last_successful_upload_at INTEGER,
+    UNIQUE (participant_id, identifier),
+    UNIQUE (participant_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS collection_request (
+    request_code TEXT PRIMARY KEY,
+    participant_id INTEGER NOT NULL REFERENCES participant(id),
+    device_id INTEGER NOT NULL,
+    client_request_id TEXT,
+    table_name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('AUTOMATIC', 'MANUAL', 'STATUS')),
+    state TEXT NOT NULL CHECK (state IN ('PENDING', 'SENT', 'PROCESSING', 'FINISHED', 'ERROR')),
+    start_ts INTEGER NOT NULL,
+    end_ts INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    row_count INTEGER NOT NULL DEFAULT 0,
+    min_timestamp INTEGER,
+    max_timestamp INTEGER,
+    error_message TEXT,
+    UNIQUE (participant_id, client_request_id),
+    FOREIGN KEY (participant_id, device_id) REFERENCES device(participant_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS request_state ON collection_request(state, kind);
+CREATE INDEX IF NOT EXISTS request_device ON collection_request(participant_id, device_id, created_at);
+
+CREATE TABLE IF NOT EXISTS upload_batch (
+    request_code TEXT NOT NULL REFERENCES collection_request(request_code),
+    batch_index INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    is_final INTEGER NOT NULL,
+    row_count INTEGER NOT NULL,
+    PRIMARY KEY (request_code, batch_index)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_ACTIVITY_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "RAW_INTENSITY" INTEGER NOT NULL,
+    "STEPS" INTEGER NOT NULL,
+    "RAW_KIND" INTEGER NOT NULL,
+    "HEART_RATE" INTEGER NOT NULL,
+    "DISTANCE_CM" INTEGER NOT NULL,
+    "ACTIVE_CALORIES" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_BODY_ENERGY_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "ENERGY" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_EVENT_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "EVENT" INTEGER NOT NULL,
+    "EVENT_TYPE" INTEGER,
+    "DATA" INTEGER,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP", "EVENT"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_HEART_RATE_RESTING_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "HEART_RATE" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_HRV_SUMMARY_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "WEEKLY_AVERAGE" INTEGER,
+    "LAST_NIGHT_AVERAGE" INTEGER,
+    "LAST_NIGHT5_MIN_HIGH" INTEGER,
+    "BASELINE_LOW_UPPER" INTEGER,
+    "BASELINE_BALANCED_LOWER" INTEGER,
+    "BASELINE_BALANCED_UPPER" INTEGER,
+    "STATUS_NUM" INTEGER,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_HRV_VALUE_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "VALUE" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_INTENSITY_MINUTES_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "MODERATE" INTEGER,
+    "VIGOROUS" INTEGER,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_NAP_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "END_TIMESTAMP" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_RESPIRATORY_RATE_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "RESPIRATORY_RATE" REAL NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_RESTING_METABOLIC_RATE_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "RESTING_METABOLIC_RATE" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_SLEEP_STAGE_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "STAGE" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_SLEEP_STATS_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "SLEEP_SCORE" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_SPO2_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "SPO2" INTEGER NOT NULL,
+    "TYPE_NUM" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "GARMIN_STRESS_SAMPLE" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "STRESS" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "BATTERY_LEVEL" (
+    "TIMESTAMP" INTEGER NOT NULL,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "LEVEL" INTEGER NOT NULL,
+    "BATTERY_INDEX" INTEGER NOT NULL,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "TIMESTAMP", "BATTERY_INDEX"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS "BASE_ACTIVITY_SUMMARY" (
+    "_id" INTEGER NOT NULL,
+    "NAME" TEXT,
+    "START_TIME" INTEGER NOT NULL,
+    "END_TIME" INTEGER NOT NULL,
+    "ACTIVITY_KIND" INTEGER NOT NULL,
+    "BASE_LONGITUDE" INTEGER,
+    "BASE_LATITUDE" INTEGER,
+    "BASE_ALTITUDE" INTEGER,
+    "DEVICE_ID" INTEGER NOT NULL,
+    "USER_ID" INTEGER NOT NULL,
+    "SUMMARY_DATA" TEXT,
+    PRIMARY KEY ("USER_ID", "DEVICE_ID", "_id"),
+    FOREIGN KEY ("USER_ID", "DEVICE_ID") REFERENCES device(participant_id, id)
+) WITHOUT ROWID;
+
+PRAGMA user_version = 1;
+`;
+
+/** ActivitySample.NOT_MEASURED */
+export const NOT_MEASURED = -1;
+
+/** Gadgetbridge ActivityKind codes used for Garmin monitoring samples. */
+export const ActivityKind = { UNKNOWN: 0, ACTIVITY: 1, NOT_WORN: 8 } as const;
+
+/** Gadgetbridge Spo2Sample.Type numbers (not the order one would guess). */
+export const Spo2Type = { MANUAL: 0, AUTOMATIC: 1, UNKNOWN: 2 } as const;

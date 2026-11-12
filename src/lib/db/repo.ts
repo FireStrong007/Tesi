@@ -19,6 +19,8 @@ export interface User {
   active_minutes_goal: number;
   distance_goal_m: number;
   calories_goal: number;
+  /** 1 = the demo profile: simulated data, never compared with others nor sent anywhere */
+  is_demo: number;
 }
 
 export interface DeviceSettings {
@@ -62,15 +64,46 @@ const parseDevice = (r: Record<string, unknown>): Device => ({
 
 // ------------------------------------------------------------------ users
 
+/** The first real (non-demo) user, created on first use. */
 export async function ensureDefaultUser(db: SqlExecutor): Promise<User> {
-  const u = await one<User>(db, "SELECT * FROM user ORDER BY id LIMIT 1");
+  const u = await one<User>(db, "SELECT * FROM user WHERE is_demo = 0 ORDER BY id LIMIT 1");
   if (u) return u;
   await db.run("INSERT INTO user (name) VALUES (?)", ["Io"]);
-  return (await one<User>(db, "SELECT * FROM user ORDER BY id LIMIT 1"))!;
+  return (await one<User>(db, "SELECT * FROM user WHERE is_demo = 0 ORDER BY id LIMIT 1"))!;
+}
+
+/** The demo profile, created on first use: simulated bands live only here. */
+export async function ensureDemoUser(db: SqlExecutor): Promise<User> {
+  const u = await one<User>(db, "SELECT * FROM user WHERE is_demo = 1 ORDER BY id LIMIT 1");
+  if (u) return u;
+  await db.run("INSERT INTO user (name, is_demo) VALUES (?, 1)", ["Demo"]);
+  return (await one<User>(db, "SELECT * FROM user WHERE is_demo = 1 ORDER BY id LIMIT 1"))!;
+}
+
+export async function getUser(db: SqlExecutor, id: number): Promise<User | undefined> {
+  return one<User>(db, "SELECT * FROM user WHERE id = ?", [id]);
+}
+
+/** The profile shown by the app (remembered in the database); falls back to the default real user. */
+export async function activeUser(db: SqlExecutor): Promise<User> {
+  const id = Number((await one<{ value: string }>(db, "SELECT value FROM meta WHERE key = 'active_user'"))?.value);
+  return (id ? await getUser(db, id) : undefined) ?? ensureDefaultUser(db);
+}
+
+export async function setActiveUser(db: SqlExecutor, id: number) {
+  await db.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('active_user', ?)", [String(id)]);
 }
 
 export async function listUsers(db: SqlExecutor): Promise<User[]> {
   return db.all<User>("SELECT * FROM user ORDER BY name");
+}
+
+/**
+ * Users whose data may contribute to comparisons with other people and, later, be sent to the
+ * server: never the demo profile. Every such path must go through this filter.
+ */
+export async function shareableUsers(db: SqlExecutor): Promise<User[]> {
+  return db.all<User>("SELECT * FROM user WHERE is_demo = 0 ORDER BY id");
 }
 
 export async function updateUser(db: SqlExecutor, id: number, patch: Partial<Omit<User, "id">>) {
@@ -105,6 +138,11 @@ export async function addDevice(
   db: SqlExecutor,
   d: { user_id: number; name: string; model?: string; ble_id?: string; is_demo?: boolean; settings?: DeviceSettings },
 ): Promise<Device> {
+  // simulated and real data never share a profile (they would add up in every chart)
+  const owner = await getUser(db, d.user_id);
+  if (!owner) throw new Error(`Utente ${d.user_id} inesistente`);
+  if (!!owner.is_demo !== !!d.is_demo)
+    throw new Error(d.is_demo ? "Un bracciale demo può stare solo nel profilo Demo" : "Nel profilo Demo non si possono aggiungere bracciali reali");
   const res = await db.run("INSERT INTO device (user_id, name, model, ble_id, is_demo, settings) VALUES (?,?,?,?,?,?)", [
     d.user_id, d.name, d.model ?? null, d.ble_id ?? null, d.is_demo ? 1 : 0, JSON.stringify(d.settings ?? {}),
   ]);

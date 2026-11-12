@@ -1,4 +1,5 @@
 import type { InitInfo, WorkerRequest } from "./db.worker";
+import type { SchemaRepair } from "./migrate";
 import type { Row, SqlExecutor, SqlParam, Statement } from "./sql";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
@@ -48,13 +49,23 @@ export class DbClient implements SqlExecutor {
     return this.call<void>({ op: "batch", statements });
   }
 
+  /** A separate in-memory database in the same worker (lost on reload), for derived computations. */
+  scratch(): SqlExecutor {
+    return {
+      all: <T = Row>(sql: string, params?: SqlParam[]) => this.call<T[]>({ op: "all", sql, params, scratch: true }),
+      run: (sql: string, params?: SqlParam[]) => this.call<{ changes: number; lastInsertRowid: number }>({ op: "run", sql, params, scratch: true }),
+      batch: (statements: Statement[]) => this.call<void>({ op: "batch", statements, scratch: true }),
+    };
+  }
+
   exportDb(): Promise<Uint8Array> {
     return this.call<Uint8Array>({ op: "export" });
   }
 
-  importDb(bytes: Uint8Array): Promise<void> {
+  /** Replaces the database; returns what the schema check had to repair in the imported file. */
+  importDb(bytes: Uint8Array): Promise<SchemaRepair[]> {
     const copy = bytes.slice();
-    return this.call<void>({ op: "import", bytes: copy }, [copy.buffer]);
+    return this.call<SchemaRepair[]>({ op: "import", bytes: copy }, [copy.buffer]);
   }
 
   wipe(): Promise<void> {

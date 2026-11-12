@@ -12,9 +12,9 @@ import { counterDelta } from "../db/importer";
 import { addDays, startOfDay } from "../db/repo";
 import { DEFAULT_PERSONA, dayRandom, rng, simulateDay, type DemoDay, type Persona } from "../demo/generator";
 import { stats, stressAverage } from "../metrics";
-import { averageOfUsers } from "./aggregate";
+import { CohortSource } from "./cohort";
 import { metricValue, type DayFacts } from "./daily-values";
-import type { CompareMetric, ComparisonQuery, ComparisonSource, DailyAverage } from "./types";
+import type { CompareMetric, ComparisonQuery } from "./types";
 
 export interface CohortMember {
   id: string;
@@ -75,25 +75,24 @@ export function demoCohort(size = COHORT_SIZE, seed = COHORT_SEED): CohortMember
 /** Today's values change while the day goes on: they are recomputed after this many seconds. */
 const TODAY_TTL = 600;
 
-export class DemoComparisonSource implements ComparisonSource {
+export class DemoComparisonSource extends CohortSource {
   readonly sample = true;
   readonly members: CohortMember[];
-  private now: () => number;
   private sims = new Map<string, { at: number; sim: DemoDay | null }>();
   private facts = new Map<string, { at: number; facts: DayFacts | null }>();
 
   constructor(opts: { size?: number; seed?: number; now?: () => number } = {}) {
+    super(opts.now);
     this.members = demoCohort(opts.size, opts.seed);
-    this.now = opts.now ?? (() => Math.floor(Date.now() / 1000));
   }
 
-  async dailyAverages(metric: CompareMetric, from: number, to: number, query: ComparisonQuery = {}): Promise<DailyAverage[]> {
+  /** Every other member's daily values over `days` (one array per person). */
+  protected async valuesOf(metric: CompareMetric, days: number[], query: ComparisonQuery) {
     const members = this.members.filter((m) => m.id !== query.excludeUserId);
-    const out: DailyAverage[] = [];
-    for (let d = from; d < to; d = addDays(d, 1)) {
-      out.push({ day: d, ...averageOfUsers(members.map((m) => metricValue(metric, this.factsOf(m, d)))) });
-      // keep the page responsive while a new period is simulated
-      if (out.length % 5 === 0) await new Promise((r) => setTimeout(r, 0));
+    const out: (number | null)[][] = members.map(() => []);
+    for (let i = 0; i < days.length; i++) {
+      members.forEach((m, k) => out[k].push(metricValue(metric, this.factsOf(m, days[i]))));
+      if (i % 5 === 4) await new Promise((r) => setTimeout(r, 0));
     }
     return out;
   }
@@ -122,23 +121,11 @@ export class DemoComparisonSource implements ComparisonSource {
   /**
    * Steps and active calories of the day as the importer counts them: per activity type, as the
    * difference between consecutive cumulative counters (a lower value = the counter restarted),
-   * starting from the last values seen on the previous days.
+   * starting again at midnight.
    */
-  private dayCounters(m: CohortMember, day: number, sim: DemoDay, now: number) {
+  private dayCounters(sim: DemoDay) {
+    // the day's rows all belong to it (00:01 ... next 00:00) and the counters restart at midnight
     const prev: Record<"1" | "6", { steps: number; cal: number }> = { "1": { steps: -1, cal: -1 }, "6": { steps: -1, cal: -1 } };
-    const missing = new Set<"1" | "6">(["1", "6"]);
-    for (let k = 1; k <= 8 && missing.size; k++) {
-      const before = this.simulate(m, addDays(day, -k), now);
-      if (!before) continue;
-      const rows = counterRows(before);
-      for (const key of [...missing]) {
-        const last = rows.filter((r) => r.key === key).pop();
-        if (last) {
-          prev[key] = { steps: last.steps, cal: last.cal };
-          missing.delete(key);
-        }
-      }
-    }
     let steps = 0;
     let calories = 0;
     for (const r of counterRows(sim)) {
@@ -162,7 +149,9 @@ export class DemoComparisonSource implements ComparisonSource {
     const resp: number[] = [];
     let moderate = 0;
     let vigorous = 0;
+    const hrHours = new Set<number>();
     for (const e of events) {
+      if (e.kind === "minute" && e.hr > 0) hrHours.add(Math.floor(e.t / 3600));
       if (e.kind === "stress") {
         // the importer stores stress >= 0 and Body Battery >= 0
         if (e.stress >= 0) stress.push({ timestamp: e.t, value: e.stress });
@@ -172,8 +161,9 @@ export class DemoComparisonSource implements ComparisonSource {
       else if (e.intensity >= 4) vigorous++;
       else if (e.intensity >= 2) moderate++;
     }
-    const counters = this.dayCounters(m, day, sim, now);
+    const counters = this.dayCounters(sim);
     return {
+      hrHours: hrHours.size,
       steps: counters.steps,
       activeCalories: counters.calories,
       moderateMinutes: moderate,
@@ -197,7 +187,7 @@ function counterRows(sim: DemoDay) {
   for (const e of sim.events) {
     if (e.kind !== "minute") continue;
     // sedentary minutes carry no counters, except the first row of the file
-    if (e.type !== 8 || first) rows.push(e.type === 1 ? { key: "1", steps: e.runSteps, cal: e.cal } : { key: "6", steps: e.walkSteps, cal: e.cal });
+    if (e.type !== 8 || first) rows.push(e.type === 1 ? { key: "1", steps: e.runSteps, cal: e.runCal } : { key: "6", steps: e.walkSteps, cal: e.walkCal });
     first = false;
   }
   return rows;

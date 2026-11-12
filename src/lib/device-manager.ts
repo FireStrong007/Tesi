@@ -6,10 +6,14 @@ import { importFit } from "./db/importer";
 import {
   addDevice,
   deleteAllSamples,
+  ensureDefaultUser,
+  ensureDemoUser,
   findDeviceByBleId,
   fitFileExists,
   getDevice,
+  getUser,
   insertFitFile,
+  listDevices,
   markFitProcessed,
   recordBattery,
   updateDevice,
@@ -143,7 +147,8 @@ export class DeviceManager {
     const device =
       existing ??
       (await addDevice(this.db, {
-        user_id: this.userId(),
+        // a real band always goes to a real profile, also when the demo is on screen
+        user_id: await this.realUserId(),
         name: ble.name ?? "Garmin",
         model: ble.name ?? undefined,
         ble_id: ble.id,
@@ -154,9 +159,30 @@ export class DeviceManager {
     return device;
   }
 
-  async addDemo(): Promise<Device> {
+  /** The active profile if it is a real one, otherwise the default real profile. */
+  private async realUserId() {
+    const u = await getUser(this.db, this.userId());
+    return u && !u.is_demo ? u.id : (await ensureDefaultUser(this.db)).id;
+  }
+
+  /**
+   * The demo band, in the demo profile (created on first use): its simulated data never mixes with
+   * a real band's. Reuses the demo band if there is one already. Returns the demo user's id.
+   */
+  async openDemo(): Promise<number> {
+    const demo = await ensureDemoUser(this.db);
+    const existing = (await listDevices(this.db, demo.id))[0];
+    if (existing) {
+      await this.connect(existing);
+      return demo.id;
+    }
+    await this.addDemo(demo.id);
+    return demo.id;
+  }
+
+  async addDemo(demoUserId?: number): Promise<Device> {
     const device = await addDevice(this.db, {
-      user_id: this.userId(),
+      user_id: demoUserId ?? (await ensureDemoUser(this.db)).id,
       name: "vívosmart 5",
       model: "vívosmart 5 (demo)",
       ble_id: `demo-${Date.now()}`,
@@ -455,8 +481,9 @@ export class DeviceManager {
 
   /** Imports .fit files picked by the user (e.g. copied from the band via USB) into this device. */
   async importFiles(deviceId: number, files: File[]) {
-    const scan = await scanImport(files);
     const device = await getDevice(this.db, deviceId);
+    if (device?.is_demo) throw new Error("Nel bracciale demo non si possono importare file");
+    const scan = await scanImport(files);
     return this.importExternal(scan.fitFiles, { userId: device?.user_id ?? this.userId(), fallbackDevice: deviceId });
   }
 
@@ -489,6 +516,48 @@ export class DeviceManager {
     L.info(`Importazione: ${report.found} file trovati, ${report.added} nuovi, ${report.duplicates} già presenti, ${report.invalid.length} non validi`);
     this.dataChanged();
     return report;
+  }
+
+  /**
+   * A one-time recomputation asked by a migration (meta.reprocess_pending): every device's data is
+   * rebuilt from its stored FIT files, then the flag is cleared. Returns the reason, or null.
+   */
+  async runPendingReprocess(): Promise<string | null> {
+    const flag = (await this.db.all<{ value: string }>("SELECT value FROM meta WHERE key = 'reprocess_pending'"))[0];
+    if (!flag) return null;
+    const devices = await this.db.all<{ id: number }>("SELECT DISTINCT device_id AS id FROM fit_file ORDER BY device_id");
+    L.info(`Ricalcolo dei dati dai file FIT (${flag.value}): ${devices.length} dispositivi`);
+    for (const d of devices) await this.reprocessAll(d.id);
+    await this.db.run("DELETE FROM meta WHERE key = 'reprocess_pending'");
+    L.info("Ricalcolo completato");
+    return flag.value;
+  }
+
+  /**
+   * Imports again the files that failed because the database lacked a table or a column (after the
+   * startup schema check repaired it). Returns per file whether it worked now.
+   */
+  async reprocessSchemaFailures(): Promise<{ fileId: number; deviceId: number; source: string; ok: boolean; error: string | null }[]> {
+    const failed = await this.db.all<{ id: number; device_id: number; source: string }>(
+      "SELECT id, device_id, source FROM fit_file WHERE error LIKE '%no such table%' OR error LIKE '%no such column%' OR error LIKE '%has no column%' ORDER BY file_date, id",
+    );
+    if (!failed.length) return [];
+    L.info(`Rielaboro ${failed.length} file non importati per lo schema incompleto`);
+    const devices = [...new Set(failed.map((f) => f.device_id))];
+    await this.db.run(`UPDATE fit_file SET processed_at = NULL, error = NULL WHERE id IN (${failed.map((f) => f.id).join(",")})`);
+    for (const d of devices) {
+      await this.processPendingFiles(d);
+      this.patch(d, { progress: null });
+    }
+    const after = await this.db.all<{ id: number; error: string | null }>(`SELECT id, error FROM fit_file WHERE id IN (${failed.map((f) => f.id).join(",")})`);
+    const res = failed.map((f) => {
+      const e = after.find((a) => a.id === f.id)?.error ?? null;
+      return { fileId: f.id, deviceId: f.device_id, source: f.source, ok: !e || e.startsWith("parziale"), error: e };
+    });
+    const ok = res.filter((r) => r.ok).length;
+    (ok === res.length ? L.info : L.warn)(`Rielaborazione dopo la riparazione dello schema: ${ok} file su ${res.length} importati`);
+    this.dataChanged();
+    return res;
   }
 
   async disconnectAll() {

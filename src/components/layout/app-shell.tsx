@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ChartColumnIcon, HouseIcon, ScrollTextIcon, SettingsIcon, TimerIcon, WatchIcon } from "lucide-react";
+import { ChartColumnIcon, FlaskConicalIcon, HouseIcon, ScrollTextIcon, SettingsIcon, TimerIcon, WatchIcon } from "lucide-react";
 import { useApp, useLive } from "@/app-context";
 import { navigate, usePath } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,7 @@ const isActive = (path: string, to: string) => (to === "/" ? path === "/" : path
 
 export function AppShell({ children }: { children: ReactNode }) {
   const path = usePath();
-  const { devices, dbInfo } = useApp();
+  const { devices, dbInfo, user, leaveDemo } = useApp();
   const live = useLive();
   const connected = devices.filter((d) => {
     const s = live.get(d.id)?.state;
@@ -65,7 +65,18 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div>{dbInfo.persistent ? "Database SQLite locale (OPFS)" : "Database temporaneo (in memoria)"}</div>
         </div>
       </aside>
-      <div className="min-w-0 flex-1 pb-20 md:pb-0">{children}</div>
+      <div className="min-w-0 flex-1 pb-20 md:pb-0">
+        {!!user.is_demo && (
+          <div className="bg-accent text-accent-foreground flex items-center gap-2 border-b px-4 py-2 text-sm md:px-8">
+            <FlaskConicalIcon className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1">Stai guardando i dati demo, separati dai tuoi.</span>
+            <button onClick={() => void leaveDemo()} className="shrink-0 font-semibold underline underline-offset-2">
+              Torna ai tuoi dati
+            </button>
+          </div>
+        )}
+        {children}
+      </div>
       <nav className="bg-card/95 pb-safe fixed inset-x-0 bottom-0 z-40 border-t backdrop-blur md:hidden">
         <div className="grid grid-cols-5">
           {NAV.map((n) => {

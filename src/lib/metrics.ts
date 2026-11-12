@@ -112,6 +112,20 @@ export function restingCalories(bmrPerDay: number | null, dayStart: number, dayE
   return Math.round((bmrPerDay * elapsed) / (dayEnd - dayStart));
 }
 
+// ------------------------------------------------------------------ valid day
+
+/**
+ * A day counts in averages and comparisons only if the band was worn for most of it: heart rate
+ * recorded in at least this many distinct hours. A day without the band (or with only a few
+ * hours) is "no data", not 0. This is the only definition, used for the user's own data
+ * (loadRange) and for the comparison cohort alike.
+ */
+export const VALID_DAY_MIN_HR_HOURS = 10;
+export const isValidDay = (hoursWithHeartRate: number) => hoursWithHeartRate >= VALID_DAY_MIN_HR_HOURS;
+
+/** The summary judgement against other users needs at least this many valid days in the period. */
+export const MIN_VALID_DAYS = 7;
+
 // ------------------------------------------------------------------ intensity minutes
 
 /** Garmin/WHO intensity minutes: vigorous minutes count double. */

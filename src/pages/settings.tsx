@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { DatabaseIcon, DownloadIcon, ScrollTextIcon, ShieldCheckIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import { navigate } from "@/lib/router";
-import { useApp } from "@/app-context";
+import { afterSchemaCheck, useApp } from "@/app-context";
 import { PageBody, PageHeader } from "@/components/page";
 import { GadgetbridgeImportCard } from "@/components/gadgetbridge-import";
 import { useTheme, type Theme } from "@/components/theme";
@@ -75,9 +75,10 @@ export function SettingsPage() {
       return;
     }
     await manager.disconnectAll();
-    await db.importDb(bytes);
+    const repairs = await db.importDb(bytes);
     await refreshUser();
     await refreshDevices();
+    await afterSchemaCheck(repairs, manager);
     bumpData();
     toast.success("Database importato");
   };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { importFit } from "../src/lib/db/importer";
-import { addDevice, dailyTotals, ensureDefaultUser, sleepSessions, startOfDay, addDays, workoutRecords, listWorkouts } from "../src/lib/db/repo";
+import { addDevice, dailyTotals, ensureDemoUser, sleepSessions, startOfDay, addDays, workoutRecords, listWorkouts } from "../src/lib/db/repo";
 import { generateDemoFiles } from "../src/lib/demo/generator";
 import { BaseType as B, decodeFit } from "../src/lib/fit/decoder";
 import { FitEncoder, toGarminTs } from "../src/lib/fit/encoder";
@@ -48,7 +48,7 @@ describe("FIT decoder", () => {
 describe("FIT import", () => {
   it("imports a generated week into SQLite with sane daily values", async () => {
     const { db } = await memoryDb();
-    const user = await ensureDefaultUser(db);
+    const user = await ensureDemoUser(db);
     const dev = await addDevice(db, { user_id: user.id, name: "vívosmart 5", is_demo: true });
     const now = new Date("2026-10-28T21:30:00");
     const files = generateDemoFiles({ days: 7, seed: 7, now });

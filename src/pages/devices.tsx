@@ -320,7 +320,7 @@ function ActionButton({ icon, label, onClick, disabled, primary }: { icon: React
 }
 
 function PairDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const { manager, refreshDevices } = useApp();
+  const { manager, refreshDevices, openDemo } = useApp();
   const [showAll, setShowAll] = useState(false);
   const [busy, setBusy] = useState(false);
   const supported = isWebBluetoothAvailable();
@@ -378,8 +378,7 @@ function PairDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: b
             variant="outline"
             onClick={async () => {
               onOpenChange(false);
-              await manager.addDemo();
-              await refreshDevices();
+              await openDemo();
             }}
           >
             Prova la demo

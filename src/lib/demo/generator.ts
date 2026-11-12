@@ -85,7 +85,7 @@ export interface PlannedWorkout {
 
 /** What the band writes in the monitoring file, in order. */
 export type MonitorEvent =
-  | { kind: "minute"; t: number; type: number; intensity: number; hr: number; walkSteps: number; walkDist: number; runSteps: number; runDist: number; cal: number }
+  | { kind: "minute"; t: number; type: number; intensity: number; hr: number; walkSteps: number; walkDist: number; walkCal: number; runSteps: number; runDist: number; runCal: number }
   | { kind: "stress"; t: number; stress: number; energy: number }
   /** respiration in hundredths (FIT scale 100) */
   | { kind: "resp"; t: number; raw: number }
@@ -207,7 +207,9 @@ function simulateMonitoring(day: number, dayEnd: number, night: Night, workouts:
   let walkDist = 0; // cm
   let runSteps = 0;
   let runDist = 0;
-  let cal = 0;
+  // like the real band, every activity type has its own cumulative counters (calories too)
+  let walkCal = 0;
+  let runCal = 0;
   let energy = 35 + Math.round(rand() * 15);
   const restingHr = p.restingHr + Math.round(rand() * 6);
   let hrNow = restingHr + 5;
@@ -234,7 +236,8 @@ function simulateMonitoring(day: number, dayEnd: number, night: Night, workouts:
         walkSteps += s;
         walkDist += s * 75;
       }
-      cal += isRun ? 11 : 5;
+      if (isRun) runCal += 11;
+      else walkCal += 5;
       target = isRun ? 152 : 104;
       energy = Math.max(5, energy - (rand() < 0.5 ? 1 : 0));
     } else {
@@ -245,7 +248,7 @@ function simulateMonitoring(day: number, dayEnd: number, night: Night, workouts:
         const s = Math.round((20 + Math.round(rand() * (activeHour ? 90 : 40))) * p.stepScale);
         walkSteps += s;
         walkDist += s * 72;
-        cal += 1 + Math.round(s / 40);
+        walkCal += 1 + Math.round(s / 40);
         target += 18;
       }
       if (rand() < 0.08) energy = Math.max(5, energy - 1);
@@ -253,7 +256,7 @@ function simulateMonitoring(day: number, dayEnd: number, night: Night, workouts:
     const hr = Math.round(smooth(target));
     // while sleeping only one sample every 15 minutes (like real bands)
     if (asleep && t % 900 !== 0) continue;
-    events.push({ kind: "minute", t, type, intensity, hr, walkSteps, walkDist, runSteps, runDist, cal });
+    events.push({ kind: "minute", t, type, intensity, hr, walkSteps, walkDist, walkCal, runSteps, runDist, runCal });
     if (t % 180 === 0) {
       const stress = asleep ? 5 + Math.round(rand() * 15) : workout ? -2 : p.stressBase + Math.round(rand() * p.stressSpread);
       events.push({ kind: "stress", t, stress, energy });
@@ -263,7 +266,7 @@ function simulateMonitoring(day: number, dayEnd: number, night: Night, workouts:
       if (asleep) events.push({ kind: "spo2", t, value: p.spo2Base + Math.round(rand() * 5) });
     }
   }
-  return { events, restingHr, steps: walkSteps + runSteps, calories: cal };
+  return { events, restingHr, steps: walkSteps + runSteps, calories: walkCal + runCal };
 }
 
 function monitorFile(sim: DemoDay, number: number): FakeFile {
@@ -286,8 +289,8 @@ function monitorFile(sim: DemoDay, number: number): FakeFile {
       ] as const;
       const counters =
         type === 1
-          ? [{ num: 5, base: B.ENUM, value: 1 }, { num: 3, base: B.UINT32, value: ev.runSteps }, { num: 2, base: B.UINT32, value: ev.runDist }, { num: 19, base: B.UINT16, value: ev.cal }]
-          : [{ num: 5, base: B.ENUM, value: 6 }, { num: 3, base: B.UINT32, value: ev.walkSteps }, { num: 2, base: B.UINT32, value: ev.walkDist }, { num: 19, base: B.UINT16, value: ev.cal }];
+          ? [{ num: 5, base: B.ENUM, value: 1 }, { num: 3, base: B.UINT32, value: ev.runSteps }, { num: 2, base: B.UINT32, value: ev.runDist }, { num: 19, base: B.UINT16, value: ev.runCal }]
+          : [{ num: 5, base: B.ENUM, value: 6 }, { num: 3, base: B.UINT32, value: ev.walkSteps }, { num: 2, base: B.UINT32, value: ev.walkDist }, { num: 19, base: B.UINT16, value: ev.walkCal }];
       e.write(55, [...fields, ...(type === 8 && !first ? [] : counters)] as never);
       first = false;
     } else if (ev.kind === "stress") {

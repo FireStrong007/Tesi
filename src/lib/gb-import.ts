@@ -14,7 +14,7 @@
  */
 import { decodeFit, num } from "./fit/decoder";
 import type { DirectoryEntry } from "./garmin/gfdi";
-import { addDevice, listDevices, storeFitFile, type Device } from "./db/repo";
+import { addDevice, getUser, listDevices, storeFitFile, type Device } from "./db/repo";
 import type { SqlExecutor } from "./db/sql";
 import { listZip, readZipEntry, sourceFromBlob, type ZipEntry, type ZipSource } from "./zip";
 
@@ -107,6 +107,8 @@ export async function storeFitInputs(
   onProgress?: (done: number, total: number) => void,
 ): Promise<ImportReport> {
   const report: ImportReport = { found: files.length, added: 0, duplicates: 0, invalid: [], touched: new Map(), createdDevice: null, matchedBySerial: 0 };
+  const owner = await getUser(db, target.userId);
+  if (!owner || owner.is_demo) throw new Error("I file di un bracciale reale non si possono importare nel profilo Demo: torna ai tuoi dati e riprova");
   const devices = (await listDevices(db, target.userId)).filter((d) => !d.is_demo);
   const bySerial = new Map(devices.filter((d) => d.unit_number).map((d) => [d.unit_number!, d]));
   let fallback: Device | null = target.fallbackDevice === "new" ? null : (devices.find((d) => d.id === target.fallbackDevice) ?? null);

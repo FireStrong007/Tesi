@@ -1,14 +1,23 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { DbClient } from "@/lib/db/client";
 import type { InitInfo } from "@/lib/db/db.worker";
-import { ensureDefaultUser, listDevices, type Device, type User } from "@/lib/db/repo";
+import type { SchemaRepair } from "@/lib/db/migrate";
+import { activeUser, ensureDefaultUser, listDevices, setActiveUser, type Device, type User } from "@/lib/db/repo";
 import { DeviceManager, type LiveState } from "@/lib/device-manager";
+import { log } from "@/lib/log";
+import { toast } from "@/components/ui/sonner";
 
 interface AppValue {
   db: DbClient;
   dbInfo: InitInfo;
+  /** the profile on screen: the real user, or the demo profile while the demo is open */
   user: User;
   refreshUser: () => Promise<void>;
+  /** opens the demo profile (creating the demo band the first time) */
+  openDemo: () => Promise<void>;
+  /** back to the real user's data */
+  leaveDemo: () => Promise<void>;
+  /** devices of the profile on screen */
   devices: Device[];
   refreshDevices: () => Promise<void>;
   manager: DeviceManager;
@@ -44,6 +53,22 @@ function getDb() {
   return singleton;
 }
 
+/**
+ * After the database is opened (at startup or after restoring a backup): say in the Log what the
+ * schema check repaired, import again the files that had failed because of it, and run a one-time
+ * recomputation asked by a migration.
+ */
+export async function afterSchemaCheck(repairs: SchemaRepair[], manager: DeviceManager) {
+  const L = log("db");
+  for (const r of repairs) (r.ok ? L.warn : L.error)(`Controllo dello schema: ${r.message}`);
+  // files that failed for a missing table can be waiting also when the repair was done by a migration
+  const res = await manager.reprocessSchemaFailures();
+  for (const r of res.filter((x) => !x.ok)) L.error(`File ${r.fileId} (${r.source}) ancora non importabile: ${r.error}`);
+  // once after an update that changes how data is computed (migration flag)
+  if (await manager.runPendingReprocess())
+    toast.success("Dati ricalcolati", { description: "I dati del bracciale sono stati ricalcolati dai file salvati con le regole aggiornate." });
+}
+
 export function AppProvider({ children, fallback }: { children: ReactNode; fallback: (error: Error | null) => ReactNode }) {
   const { db, ready } = getDb();
   const [dbInfo, setDbInfo] = useState<InitInfo | null>(null);
@@ -55,12 +80,26 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
   const manager = useMemo(() => new DeviceManager(db, () => userRef.id), [db, userRef]);
 
   const refreshUser = useCallback(async () => {
-    const u = await ensureDefaultUser(db);
+    const u = await activeUser(db);
     userRef.id = u.id;
     setUser(u);
   }, [db, userRef]);
-  const refreshDevices = useCallback(async () => setDevices(await listDevices(db)), [db]);
+  const refreshDevices = useCallback(async () => setDevices(await listDevices(db, userRef.id || undefined)), [db, userRef]);
   const bumpData = useCallback(() => setDataVersion((v) => v + 1), []);
+  const switchTo = useCallback(
+    async (id: number) => {
+      await setActiveUser(db, id);
+      await refreshUser();
+      await refreshDevices();
+      bumpData();
+    },
+    [db, refreshUser, refreshDevices, bumpData],
+  );
+  const openDemo = useCallback(async () => {
+    const id = await manager.openDemo();
+    await switchTo(id);
+  }, [manager, switchTo]);
+  const leaveDemo = useCallback(async () => switchTo((await ensureDefaultUser(db)).id), [db, switchTo]);
 
   useEffect(() => {
     ready
@@ -68,9 +107,10 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
         setDbInfo(info);
         await refreshUser();
         await refreshDevices();
+        await afterSchemaCheck(info.repairs, manager);
       })
       .catch((e) => setError(e));
-  }, [ready, refreshUser, refreshDevices]);
+  }, [ready, refreshUser, refreshDevices, manager]);
 
   useEffect(() => {
     manager.onDataChanged = () => {
@@ -84,8 +124,8 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
 
   const live = useSyncExternalStore(manager.subscribe, manager.getSnapshot);
   const value = useMemo(
-    () => (dbInfo && user ? { db, dbInfo, user, refreshUser, devices, refreshDevices, manager, dataVersion, bumpData } : null),
-    [db, dbInfo, user, refreshUser, devices, refreshDevices, manager, dataVersion, bumpData],
+    () => (dbInfo && user ? { db, dbInfo, user, refreshUser, openDemo, leaveDemo, devices, refreshDevices, manager, dataVersion, bumpData } : null),
+    [db, dbInfo, user, refreshUser, openDemo, leaveDemo, devices, refreshDevices, manager, dataVersion, bumpData],
   );
 
   if (error || !value) return <>{fallback(error)}</>;
