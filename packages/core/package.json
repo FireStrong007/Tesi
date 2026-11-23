@@ -1,0 +1,11 @@
+{
+  "name": "@bridge/core",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Calcoli, adattatori dei formati dei database e tipi condivisi tra web app e server (nessuna dipendenza da browser o server).",
+  "license": "AGPL-3.0-or-later",
+  "exports": {
+    "./*": "./src/*.ts"
+  }
+}

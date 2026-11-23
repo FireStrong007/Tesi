@@ -1,5 +1,4 @@
 {
   "files": [],
-  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }],
-  "compilerOptions": { "paths": { "@/*": ["./src/*"] } }
+  "references": [{ "path": "./packages/core" }, { "path": "./apps/web" }]
 }
