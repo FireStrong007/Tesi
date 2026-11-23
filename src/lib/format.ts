@@ -35,6 +35,19 @@ export const fmtDateTime = (ts: number) =>
   new Date(ts * 1000).toLocaleString("it-IT", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 export const fmtWeekday = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { weekday: "narrow" });
 export const fmtDayNum = (ts: number) => new Date(ts * 1000).getDate().toString();
+/** "27 ott" */
+export const fmtDayMonth = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { day: "numeric", month: "short" });
+/** "Novembre", with the year when it is not the current one ("Dicembre 2025") */
+export const fmtMonth = (ts: number) => {
+  const d = new Date(ts * 1000);
+  const s = d.toLocaleDateString("it-IT", d.getFullYear() === new Date().getFullYear() ? { month: "long" } : { month: "long", year: "numeric" });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
+/** "Martedì 27 ottobre" */
+export const fmtDayTitle = (ts: number) => {
+  const s = new Date(ts * 1000).toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
 
 export function fmtRelative(ts: number | null | undefined) {
   if (!ts) return "mai";

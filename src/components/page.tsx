@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { ArrowLeftIcon, CalendarDaysIcon, ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ArrowLeftIcon, CalendarDaysIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { addDays, startOfDay } from "@/lib/db/repo";
-import { fmtDay, fmtDayLong } from "@/lib/format";
+import { fmtDay, fmtDayLong, fmtMonth } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export function PageHeader({ title, subtitle, back, actions, wide }: { title: ReactNode; subtitle?: ReactNode; back?: () => void; actions?: ReactNode; wide?: boolean }) {
@@ -30,112 +30,87 @@ export function PageBody({ children, className, wide }: { children: ReactNode; c
 
 export type Period = "day" | "week" | "month";
 
+/** The days shown for a period: the day, its Monday–Sunday week, or its calendar month (1st to last day). */
 export function periodRange(period: Period, anchor: number): { from: number; to: number } {
   const day = startOfDay(anchor);
   if (period === "day") return { from: day, to: addDays(day, 1) };
-  if (period === "week") return { from: addDays(day, -6), to: addDays(day, 1) };
-  return { from: addDays(day, -29), to: addDays(day, 1) };
+  if (period === "week") {
+    const monday = addDays(day, -((new Date(day * 1000).getDay() + 6) % 7));
+    return { from: monday, to: addDays(monday, 7) };
+  }
+  return { from: monthStart(day, 0), to: monthStart(day, 1) };
 }
 
-const addMonths = (day: number, n: number) => {
+/** local midnight of the 1st of the month `n` months after the one containing `day` */
+export const monthStart = (day: number, n: number) => {
   const d = new Date(day * 1000);
-  return new Date(d.getFullYear(), d.getMonth() + n, d.getDate()).getTime() / 1000;
+  return new Date(d.getFullYear(), d.getMonth() + n, 1).getTime() / 1000;
 };
+
 const isoDate = (day: number) => {
   const d = new Date(day * 1000);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
 /**
- * Date navigation. Like Gadgetbridge it can jump by a day, a week or a month; the date opens a calendar.
- * `compact` shows only the arrows of the current period (Home).
+ * Date navigation: two arrows that move by the period (a day, a Monday–Sunday week, a calendar
+ * month) and its label. Only the day opens a calendar. `compact` (Home) has no button back to today.
  */
 export function DateNav({ day, onChange, period = "day", compact = false }: { day: number; onChange: (d: number) => void; period?: Period; compact?: boolean }) {
   const today = startOfDay(Date.now() / 1000);
-  const { from } = periodRange(period, day);
-  const label = period === "day" ? (day === today ? "Oggi" : day === addDays(today, -1) ? "Ieri" : fmtDayLong(day)) : `${fmtDay(from)} – ${fmtDay(day)}`;
+  const { from, to } = periodRange(period, day);
+  const current = today >= from && today < to;
   const go = (d: number) => onChange(Math.min(today, startOfDay(d)));
-  const step = period === "day" ? 1 : period === "week" ? 7 : 30;
-  const jumps: { label: string; title: string; to: (d: number) => number }[] = [
-    { label: "M", title: "Un mese", to: (d) => addMonths(d, -1) },
-    { label: "S", title: "Una settimana", to: (d) => addDays(d, -7) },
-    { label: "G", title: "Un giorno", to: (d) => addDays(d, -1) },
-  ];
-  const picker = (
-    <label className="hover:bg-accent relative flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium">
-      <CalendarDaysIcon className="text-muted-foreground size-4 shrink-0" />
-      <span className="truncate capitalize">{label}</span>
-      <input
-        type="date"
-        aria-label="Scegli una data"
-        max={isoDate(today)}
-        value={isoDate(day)}
-        onChange={(e) => {
-          if (!e.target.value) return;
-          const [y, m, dd] = e.target.value.split("-").map(Number);
-          go(new Date(y, m - 1, dd).getTime() / 1000);
-        }}
-        onClick={(e) => {
-          try {
-            (e.currentTarget as HTMLInputElement).showPicker?.();
-          } catch {
-            /* not supported: the native input opens anyway */
-          }
-        }}
-        className="absolute inset-0 cursor-pointer opacity-0"
-      />
-    </label>
-  );
-  if (compact)
-    return (
-      <div className="bg-card flex items-center justify-between rounded-xl border p-1">
-        <Button variant="ghost" size="icon" onClick={() => go(addDays(day, -step))} aria-label="Precedente">
-          <ChevronLeftIcon />
-        </Button>
-        {picker}
-        <Button variant="ghost" size="icon" onClick={() => go(addDays(day, step))} disabled={day >= today} aria-label="Successivo">
-          <ChevronRightIcon />
-        </Button>
+  // the next week and month start where this one ends
+  const prev = period === "day" ? addDays(day, -1) : period === "week" ? addDays(from, -7) : monthStart(day, -1);
+  const next = period === "day" ? addDays(day, 1) : to;
+  const names = {
+    day: ["Giorno precedente", "Giorno successivo", "Oggi"],
+    week: ["Settimana precedente", "Settimana successiva", "Questa settimana"],
+    month: ["Mese precedente", "Mese successivo", "Questo mese"],
+  }[period];
+  const center =
+    period === "day" ? (
+      <label className="hover:bg-accent relative flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium">
+        <CalendarDaysIcon className="text-muted-foreground size-4 shrink-0" />
+        <span className="truncate capitalize">{day === today ? "Oggi" : day === addDays(today, -1) ? "Ieri" : fmtDayLong(day)}</span>
+        <input
+          type="date"
+          aria-label="Scegli una data"
+          max={isoDate(today)}
+          value={isoDate(day)}
+          onChange={(e) => {
+            if (!e.target.value) return;
+            const [y, m, dd] = e.target.value.split("-").map(Number);
+            go(new Date(y, m - 1, dd).getTime() / 1000);
+          }}
+          onClick={(e) => {
+            try {
+              (e.currentTarget as HTMLInputElement).showPicker?.();
+            } catch {
+              /* not supported: the native input opens anyway */
+            }
+          }}
+          className="absolute inset-0 cursor-pointer opacity-0"
+        />
+      </label>
+    ) : (
+      <div className="flex min-w-0 flex-1 items-center justify-center px-2 py-1.5 text-sm font-medium">
+        <span className="truncate">{period === "month" ? fmtMonth(day) : `${fmtDay(from)} – ${fmtDay(addDays(to, -1))}`}</span>
       </div>
     );
   return (
     <div className="bg-card flex items-center gap-0.5 rounded-xl border p-1">
-      {jumps.map((j, i) => (
-        <Button
-          key={j.label}
-          variant="ghost"
-          size="sm"
-          className={cn("text-muted-foreground px-2 tabular", i < 2 && "hidden sm:inline-flex")}
-          onClick={() => go(j.to(day))}
-          title={`Indietro di ${j.title.toLowerCase()}`}
-          aria-label={`Indietro di ${j.title.toLowerCase()}`}
-        >
-          {i < 2 ? <ChevronsLeftIcon /> : <ChevronLeftIcon />}
-          <span className="text-xs">{j.label}</span>
-        </Button>
-      ))}
-      {picker}
-      {[...jumps].reverse().map((j, i) => {
-        const fwd = (d: number) => (j.label === "M" ? addMonths(d, 1) : addDays(d, j.label === "S" ? 7 : 1));
-        return (
-          <Button
-            key={j.label}
-            variant="ghost"
-            size="sm"
-            className={cn("text-muted-foreground px-2", i > 0 && "hidden sm:inline-flex")}
-            onClick={() => go(fwd(day))}
-            disabled={day >= today}
-            title={`Avanti di ${j.title.toLowerCase()}`}
-            aria-label={`Avanti di ${j.title.toLowerCase()}`}
-          >
-            <span className="text-xs">{j.label}</span>
-            {i > 0 ? <ChevronsRightIcon /> : <ChevronRightIcon />}
-          </Button>
-        );
-      })}
-      {day < today && (
+      <Button variant="ghost" size="icon" onClick={() => go(prev)} aria-label={names[0]} title={names[0]}>
+        <ChevronLeftIcon />
+      </Button>
+      {center}
+      <Button variant="ghost" size="icon" onClick={() => go(next)} disabled={current} aria-label={names[1]} title={names[1]}>
+        <ChevronRightIcon />
+      </Button>
+      {!compact && !current && (
         <Button variant="outline" size="sm" className="ml-1 hidden md:inline-flex" onClick={() => onChange(today)}>
-          Oggi
+          {names[2]}
         </Button>
       )}
     </div>

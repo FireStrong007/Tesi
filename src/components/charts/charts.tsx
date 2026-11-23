@@ -7,7 +7,7 @@
  * ./interaction.ts. Each chart renders its axes and data as memoized layers,
  * so moving the finger only re-renders the cursor and the tooltip.
  */
-import { useId, useMemo, type ReactNode, type RefObject } from "react";
+import { useId, useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSize } from "@/hooks/use-size";
@@ -210,11 +210,17 @@ export interface BarItem {
   segments?: { value: number; color: string }[];
   /** extra tooltip lines (e.g. time in each stress level) */
   details?: TipLine[];
+  /** a day (or week) still in progress: drawn lighter, with a dashed outline */
+  partial?: boolean;
+  /** a day still to come: an empty slot that cannot be pointed at nor opened */
+  future?: boolean;
 }
 
+const PARTIAL_OPACITY = 0.35;
+
 /**
- * A second daily series drawn over the bars: a line with points (e.g. the other users' median),
- * optionally inside a translucent band (e.g. their 25th–75th percentile).
+ * A second daily series drawn over the bars: a line (e.g. the other users' median), optionally
+ * inside a translucent band (e.g. their 25th–75th percentile).
  */
 export interface BarOverlay {
   /** one value per bar; null = no value that day (the line breaks) */
@@ -223,17 +229,53 @@ export interface BarOverlay {
   low?: (number | null)[];
   high?: (number | null)[];
   color: string;
-  /** tooltip lines of the overlay for bar i */
-  tip: (i: number) => TipLine[];
-  /** the user's own value per bar, shown as "Tu: …" in the tooltip */
-  mine?: (number | null)[];
-  mineLabel?: string;
-  /** colour of the user's value in the tooltip (default: the bar's colour) */
-  mineColor?: string;
-  /** keep the bar's own tooltip line too (min–max bars, where "Tu" is another quantity) */
-  keepBarLine?: boolean;
-  format?: (v: number) => string;
 }
+
+/** One column of the panel under a bar chart (see BarChart `info`). */
+export interface InfoItem {
+  label: string;
+  /** colour of the label */
+  color?: string;
+  value: string;
+  /** smaller text after the value, on the same line */
+  suffix?: string;
+  /** further lines under the value */
+  notes?: TipLine[];
+}
+
+/** What the panel under a bar chart shows for one bar: columns, and an optional message beside them. */
+export interface InfoContent {
+  items: InfoItem[];
+  message?: string;
+}
+
+function InfoPanel({ items, message }: InfoContent) {
+  return (
+    <div className="bg-muted/40 grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-lg border px-3 py-2.5 sm:grid-cols-4">
+      {items.map((c) => (
+        <div key={c.label} className="min-w-0">
+          <div className={cn("truncate text-[11px] font-medium", !c.color && "text-muted-foreground")} style={c.color ? { color: c.color } : undefined}>
+            {c.label}
+          </div>
+          <div className="text-sm font-semibold tabular-nums">
+            {c.value}
+            {c.suffix && <span className="text-muted-foreground ml-1 text-xs font-normal">{c.suffix}</span>}
+          </div>
+          {c.notes?.map((n, k) => (
+            <div key={k} className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
+              {n.color && <span className="size-1.5 shrink-0 rounded-full" style={{ background: n.color }} />}
+              <span className="truncate">{n.text}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+      {message && <div className="text-muted-foreground col-span-2 self-center text-sm">{message}</div>}
+    </div>
+  );
+}
+
+/** the smallest of 1, 2, 3, 5, 7, 10 bars between two labels that leaves `gap` px between them */
+const labelStep = (bw: number, gap: number) => [1, 2, 3, 5, 7, 10].find((k) => k * bw >= gap) ?? 10;
 
 export interface RefLine {
   value: number;
@@ -256,6 +298,11 @@ export function BarChart({
   yMin,
   yMax,
   overlay,
+  sideLabels = false,
+  tightY = false,
+  minLabelGap = 0,
+  info,
+  infoDefault,
 }: {
   items: BarItem[];
   height?: number;
@@ -272,17 +319,29 @@ export function BarChart({
   yMin?: number;
   yMax?: number;
   overlay?: BarOverlay;
+  /** labels of the goal and reference lines to the right of the plot instead of over the bars */
+  sideLabels?: boolean;
+  /** axis maximum just above the highest value instead of the next round number */
+  tightY?: boolean;
+  /** thin out the day labels so that they are at least this many px apart */
+  minLabelGap?: number;
+  /** a panel under the chart for the bar under the pointer (or the last one pointed at), instead of the tooltip */
+  info?: (i: number) => InfoContent;
+  /** bar shown in the panel before any is pointed at */
+  infoDefault?: number;
 }) {
   const [ref, { width: w }] = useSize<HTMLDivElement>();
   const padL = 40;
+  const padR = sideLabels ? 58 : 0;
   const padB = 22;
   const padT = 8;
-  const plotW = Math.max(1, w - padL);
+  const plotW = Math.max(1, w - padL - padR);
+  const plotR = padL + plotW;
   const plotH = height - padB - padT;
   const bw = plotW / Math.max(items.length, 1);
   const indexAt = (px: number) => {
     const i = Math.floor((px - padL) / bw);
-    return i >= 0 && i < items.length ? i : null;
+    return i >= 0 && i < items.length && !items[i].future ? i : null;
   };
   const ix = useChartInteraction({
     ref,
@@ -297,8 +356,8 @@ export function BarChart({
   });
 
   const top = Math.max(goal ?? 0, ...refLines.map((r) => r.value), ...items.map((i) => Math.max(i.value, i.marker ?? 0)), ...(overlay?.values ?? []).map((v) => v ?? 0), ...(overlay?.high ?? []).map((v) => v ?? 0));
-  const max = yMax ?? niceMax(top * 1.08);
   const min = yMin ?? 0;
+  const max = yMax ?? (tightY ? min + niceCeil((top - min) * 1.03) : niceMax(top * 1.08));
   const y = (v: number) => padT + plotH - ((Math.max(min, v) - min) / (max - min || 1)) * plotH;
   const vf = valueFormat ?? format;
 
@@ -307,13 +366,42 @@ export function BarChart({
       w > 0 &&
       [min, (min + max) / 2, max].map((t) => (
         <g key={t}>
-          <line x1={padL} x2={w} y1={y(t)} y2={y(t)} stroke="var(--chart-grid)" />
+          <line x1={padL} x2={plotR} y1={y(t)} y2={y(t)} stroke="var(--chart-grid)" />
           <text x={padL - 6} y={y(t) + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
             {format(t)}
           </text>
         </g>
       )),
-    [w, min, max, plotH, format], // eslint-disable-line react-hooks/exhaustive-deps
+    [w, min, max, plotH, format, padR], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const every = Math.max(labelEvery, labelStep(bw, minLabelGap));
+  // labels beside the plot are two lines high: lines close to each other push their labels apart
+  const sideY = new Map<string, number>();
+  if (sideLabels) {
+    const lines = [...(goal !== undefined && goal > 0 ? [{ key: "goal", v: goal }] : []), ...refLines.filter((r) => r.label).map((r) => ({ key: `${r.value}${r.label}`, v: r.value }))];
+    lines.sort((a, b) => y(a.v) - y(b.v));
+    let prev = -Infinity;
+    for (const l of lines) sideY.set(l.key, (prev = Math.max(y(l.v), prev + 23)));
+  }
+  /** a goal or reference line, labelled over the bars or to the right of the plot (label and value) */
+  const hLine = (key: string, v: number, color: string, label: string | undefined, width: number) => (
+    <g key={key}>
+      <line x1={padL} x2={plotR} y1={y(v)} y2={y(v)} stroke={color} strokeDasharray="5 4" strokeWidth={width} />
+      {label &&
+        (sideLabels ? (
+          <text x={plotR + 6} y={(sideY.get(key) ?? y(v)) - 2} className="text-[10px] font-medium" fill={color}>
+            {label}
+            <tspan x={plotR + 6} dy={11} className="tabular-nums">
+              {format(v)}
+            </tspan>
+          </text>
+        ) : (
+          <text x={padL + 4} y={y(v) - 4} className="text-[10px] font-medium" fill={color}>
+            {label}
+          </text>
+        ))}
+    </g>
   );
 
   const bars = useMemo(
@@ -329,12 +417,14 @@ export function BarChart({
               <g key={it.key}>
                 {isSel && <rect x={padL + i * bw} y={padT} width={bw} height={plotH} fill="var(--accent)" rx={4} />}
                 {it.segments ? (
-                  it.segments.map((s, k) => {
-                    const top = y(acc + s.value);
-                    const h = y(acc) - top;
-                    acc += s.value;
-                    return <rect key={k} x={x} y={top} width={bwi} height={Math.max(0, h)} fill={s.color} />;
-                  })
+                  <g opacity={it.partial ? PARTIAL_OPACITY : 1}>
+                    {it.segments.map((s, k) => {
+                      const top = y(acc + s.value);
+                      const h = y(acc) - top;
+                      acc += s.value;
+                      return <rect key={k} x={x} y={top} width={bwi} height={Math.max(0, h)} fill={s.color} />;
+                    })}
+                  </g>
                 ) : (
                   <rect
                     x={x}
@@ -343,7 +433,21 @@ export function BarChart({
                     height={Math.max(it.value > (it.base ?? min) ? 2 : 0, y(it.base ?? min) - y(it.value))}
                     rx={Math.min(3, bwi / 3)}
                     fill={it.color ?? color}
+                    fillOpacity={it.partial ? PARTIAL_OPACITY : undefined}
                     opacity={selected != null && !isSel ? 0.55 : 1}
+                  />
+                )}
+                {it.partial && it.value > (it.base ?? min) && (
+                  <rect
+                    x={x}
+                    y={y(it.value)}
+                    width={bwi}
+                    height={Math.max(0, y(it.base ?? min) - y(it.value))}
+                    rx={Math.min(3, bwi / 3)}
+                    fill="none"
+                    stroke={it.segments ? "var(--muted-foreground)" : (it.color ?? color)}
+                    strokeWidth={1.25}
+                    strokeDasharray="4 3"
                   />
                 )}
                 {it.marker !== undefined && <circle cx={x + bwi / 2} cy={y(it.marker)} r={Math.max(2.5, Math.min(4.5, bwi / 3))} fill="var(--foreground)" stroke="var(--card)" strokeWidth={1.5} />}
@@ -352,7 +456,7 @@ export function BarChart({
                     {vf(it.value)}
                   </text>
                 )}
-                {(i % labelEvery === 0 || isSel) && (
+                {(i % every === 0 || isSel) && (
                   <text x={padL + i * bw + bw / 2} y={height - 6} textAnchor="middle" className={cn("text-[10px]", isSel ? "fill-foreground font-semibold" : "fill-muted-foreground")}>
                     {it.label}
                   </text>
@@ -360,27 +464,11 @@ export function BarChart({
               </g>
             );
           })}
-          {goal !== undefined && goal > 0 && (
-            <g>
-              <line x1={padL} x2={w} y1={y(goal)} y2={y(goal)} stroke="var(--goal)" strokeDasharray="5 4" strokeWidth={1.5} />
-              <text x={padL + 4} y={y(goal) - 4} className="text-[10px] font-medium" fill="var(--goal)">
-                Obiettivo
-              </text>
-            </g>
-          )}
-          {refLines.map((r) => (
-            <g key={r.value + (r.label ?? "")}>
-              <line x1={padL} x2={w} y1={y(r.value)} y2={y(r.value)} stroke={r.color} strokeDasharray="5 4" strokeWidth={1.25} />
-              {r.label && (
-                <text x={padL + 4} y={y(r.value) - 4} className="text-[10px] font-medium" fill={r.color}>
-                  {r.label}
-                </text>
-              )}
-            </g>
-          ))}
+          {goal !== undefined && goal > 0 && hLine("goal", goal, "var(--goal)", "Obiettivo", 1.5)}
+          {refLines.map((r) => hLine(`${r.value}${r.label ?? ""}`, r.value, r.color, r.label, 1.25))}
         </g>
       ),
-    [items, w, min, max, plotH, height, selected, showValues, labelEvery, goal, refLines, color, vf], // eslint-disable-line react-hooks/exhaustive-deps
+    [items, w, min, max, plotH, height, selected, showValues, every, goal, refLines, color, vf, sideLabels, format], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // overlay: a translucent band (one shape per run of days with a value) and a line through the bar
@@ -411,7 +499,6 @@ export function BarChart({
         bands.push({ area: `M${upper.join("L")}L${lower.join("L")}Z`, edges: `M${upper.join("L")}M${lower.join("L")}` });
       }
     }
-    const r = Math.max(2, Math.min(3.5, bw / 4));
     return [
       <g key="fill" pointerEvents="none">
         {bands.map((b, k) => (
@@ -424,34 +511,31 @@ export function BarChart({
         ))}
         <path d={d} fill="none" stroke="var(--card)" strokeWidth={4.5} strokeLinejoin="round" strokeLinecap="round" />
         <path d={d} fill="none" stroke={overlay.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-        {overlay.values.map((v, i) => (v == null ? null : <circle key={i} cx={cx(i)} cy={y(v)} r={r} fill={overlay.color} stroke="var(--card)" strokeWidth={1.5} />))}
       </g>,
     ];
   }, [overlay, items.length, w, min, max, plotH, bw]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hover = ix.hoverX !== null ? indexAt(ix.hoverX) : null;
-  const hit = hover !== null ? items[hover] : null;
-  const barLine = hit ? { text: hit.base !== undefined ? `${vf(hit.base)} – ${vf(hit.value)}` : vf(hit.value) } : null;
-  let lines: TipLine[] = barLine ? [barLine] : [];
-  if (hit && overlay) {
-    const of = overlay.format ?? vf;
-    const mine = overlay.mine?.[hover!];
-    lines = [
-      ...(overlay.keepBarLine ? lines : []),
-      ...(overlay.mine ? [{ text: `${overlay.mineLabel ?? "Tu"}: ${mine != null ? of(mine) : "–"}`, color: overlay.mineColor ?? hit.color ?? color }] : []),
-    ];
-  }
-  if (hit?.details) lines.push(...hit.details);
-  if (hit && overlay) lines.push(...overlay.tip(hover!));
+  // the panel keeps the last bar pointed at (on a phone the finger lifts), else the default one
+  const lastKey = useRef<string | number | null>(null);
+  if (hover !== null) lastKey.current = items[hover].key;
+  const kept = lastKey.current != null ? items.findIndex((it) => it.key === lastKey.current) : -1;
+  const infoIndex = info ? (hover ?? (kept >= 0 ? kept : infoDefault != null && infoDefault < items.length ? infoDefault : null)) : null;
+  const marked = info ? infoIndex : hover;
+  const hit = !info && hover !== null ? items[hover] : null;
+  const lines: TipLine[] = hit ? [{ text: hit.base !== undefined ? `${vf(hit.base)} – ${vf(hit.value)}` : vf(hit.value) }, ...(hit.details ?? [])] : [];
   return (
-    <Surface boxRef={ref} ix={ix} width={w} height={height} cursor={onSelect ? "cursor-pointer" : undefined}>
-      {grid}
-      {hover !== null && <rect x={padL + hover * bw} y={padT} width={bw} height={plotH} fill="color-mix(in oklch, var(--accent) 60%, transparent)" rx={4} pointerEvents="none" />}
-      {bandFill}
-      {bars}
-      {overlayLayer}
-      {hit && <Tooltip x={padL + hover! * bw + bw / 2} width={w} plotLeft={padL} top={padT} title={hit.label} lines={lines} />}
-    </Surface>
+    <>
+      <Surface boxRef={ref} ix={ix} width={w} height={height} cursor={onSelect ? "cursor-pointer" : undefined}>
+        {grid}
+        {marked !== null && <rect x={padL + marked * bw} y={padT} width={bw} height={plotH} fill="color-mix(in oklch, var(--accent) 60%, transparent)" rx={4} pointerEvents="none" />}
+        {bandFill}
+        {bars}
+        {overlayLayer}
+        {hit && <Tooltip x={padL + hover! * bw + bw / 2} width={plotR} plotLeft={padL} top={padT} title={hit.label} lines={lines} />}
+      </Surface>
+      {info && infoIndex !== null && <InfoPanel {...info(infoIndex)} />}
+    </>
   );
 }
 
