@@ -5,3 +5,5 @@ dist
 # real server databases: personal data, never in git
 data/
 *.db
+# authentication databases written by our server
+auth/
