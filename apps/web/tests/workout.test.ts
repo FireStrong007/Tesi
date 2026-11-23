@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { importFit } from "../src/lib/db/importer";
 import { addDevice, ensureDefaultUser, listWorkouts, workoutLaps, workoutRecords } from "../src/lib/db/repo";
-import { generateDemoFiles } from "../src/lib/demo/generator";
+import { generateDemoFiles } from "@bridge/synth/demo/generator";
 import { distanceSplits, hrZones, paceLabel, parseSummary, smooth, workoutCadence, workoutSteps, zoneThresholds } from "../src/lib/workout";
 import { memoryDb } from "./helpers";
 

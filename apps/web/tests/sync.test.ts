@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { importFit } from "../src/lib/db/importer";
 import { addDevice, ensureDefaultUser, fitFileExists, insertFitFile, tableCounts } from "../src/lib/db/repo";
 import { FakeWatch } from "../src/lib/demo/fake-watch";
-import { generateDemoFiles } from "../src/lib/demo/generator";
+import { generateDemoFiles } from "@bridge/synth/demo/generator";
 import { Msg } from "../src/lib/garmin/gfdi";
 import { GarminSession, type SessionOptions } from "../src/lib/garmin/session";
 import { memoryDb } from "./helpers";

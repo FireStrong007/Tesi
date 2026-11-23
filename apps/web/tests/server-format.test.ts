@@ -7,7 +7,7 @@ import { oo1All, oo1Executor } from "@bridge/core/db/sql";
 import { loadRange } from "@bridge/core/range-data";
 import { createLocalViews } from "@bridge/core/server/views";
 import { memoryDb } from "./helpers";
-import { SERVER_TABLES, fitToServerRows, type Row, type ServerTable } from "../src/lib/server/fit-to-server";
+import { SERVER_TABLES, fitToServerRows, type Row, type ServerTable } from "@bridge/synth/server/fit-to-server";
 import { GB_EXPORT, loadGbExport } from "./gb-export";
 
 /** Rows of one table that differ between our conversion and Gadgetbridge's database. */

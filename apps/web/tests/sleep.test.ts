@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { importFit } from "../src/lib/db/importer";
 import { addDays, addDevice, ensureDefaultUser, sleepSessions, sleepTotal, startOfDay } from "../src/lib/db/repo";
-import { BaseType as B } from "../src/lib/fit/decoder";
-import { FitEncoder, toGarminTs } from "../src/lib/fit/encoder";
+import { BaseType as B } from "@bridge/synth/fit/decoder";
+import { FitEncoder, toGarminTs } from "@bridge/synth/fit/encoder";
 import { memoryDb } from "./helpers";
 
 /** The structure of the real vívosmart 5 SLEEP file of the night 2→3 November 2026 (from a Gadgetbridge export). */

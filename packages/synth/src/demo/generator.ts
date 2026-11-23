@@ -5,7 +5,15 @@
  */
 import { BaseType as B } from "../fit/decoder";
 import { FitEncoder, toGarminTs } from "../fit/encoder";
-import type { FakeFile } from "./fake-watch";
+
+/** A file as the band lists and sends it (also what the demo band serves). */
+export interface FakeFile {
+  dataType: number;
+  subType: number;
+  fileNumber: number;
+  date: number; // unix
+  data: Uint8Array;
+}
 
 export function rng(seed: number) {
   let s = seed >>> 0;

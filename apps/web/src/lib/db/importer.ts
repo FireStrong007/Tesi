@@ -5,8 +5,8 @@
  *  - monitoring cumulative counters are converted to per-sample deltas here,
  *    keeping per-activity-type counter state across files (stored in `meta`).
  */
-import { decodeFit, num, type FitRecord } from "../fit/decoder";
-import { GARMIN_EPOCH } from "../garmin/time";
+import { decodeFit, num, type FitRecord } from "@bridge/synth/fit/decoder";
+import { GARMIN_EPOCH } from "@bridge/synth/garmin/time";
 import type { SqlExecutor, Statement } from "@bridge/core/db/sql";
 
 export interface ImportContext {

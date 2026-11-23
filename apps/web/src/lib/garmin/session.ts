@@ -8,9 +8,9 @@
  * The flow follows Gadgetbridge's GarminSupport / FileTransferHandler (AGPL-3.0)
  * with the default (legacy) sync protocol and plain Multi-Link.
  */
-import { hex } from "../bytes";
+import { hex } from "@bridge/synth/bytes";
 import { capabilitiesFromBinary, capabilitiesToBinary, ourCapabilities, type Capability, type CapabilityProfile } from "./capabilities";
-import { crc16 } from "./crc";
+import { crc16 } from "@bridge/synth/garmin/crc";
 import { fileTypeOf, shouldDownload } from "./filetypes";
 import {
   DownloadStatus,
@@ -395,7 +395,7 @@ export class GarminSession {
     this.hooks.log("info", "Dispositivo inizializzato");
   }
 
-  private async handleStatus(r: import("../bytes").ByteReader) {
+  private async handleStatus(r: import("@bridge/synth/bytes").ByteReader) {
     const st = parseStatus(r);
     switch (st.originalType) {
       case Msg.DOWNLOAD_REQUEST: {

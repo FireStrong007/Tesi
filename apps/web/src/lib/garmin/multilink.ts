@@ -4,7 +4,7 @@
  * GFDI runs on its own handle, framed with COBS.
  * Port of Gadgetbridge's CommunicatorV2 without the reliable (MLR) mode (AGPL-3.0).
  */
-import { ByteReader, ByteWriter, hex } from "../bytes";
+import { ByteReader, ByteWriter, hex } from "@bridge/synth/bytes";
 import { CobsStreamDecoder, cobsEncode } from "./cobs";
 import type { BleTransport } from "./transport";
 

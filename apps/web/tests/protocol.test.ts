@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { fromHex } from "../src/lib/bytes";
+import { fromHex } from "@bridge/synth/bytes";
 import { CAPABILITIES, capabilitiesFromBinary, capabilitiesToBinary, ourCapabilities } from "../src/lib/garmin/capabilities";
 import { CobsStreamDecoder, cobsDecodeFrame, cobsEncode } from "../src/lib/garmin/cobs";
-import { crc16 } from "../src/lib/garmin/crc";
+import { crc16 } from "@bridge/synth/garmin/crc";
 import { Msg, buildMessage, nextDstTransitions, out, parseMessage, parseStatus } from "../src/lib/garmin/gfdi";
 import { parseSmartBattery, pbDecode, pbEncode, smartBatteryRequest } from "../src/lib/garmin/protobuf";
 

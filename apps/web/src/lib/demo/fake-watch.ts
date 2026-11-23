@@ -3,21 +3,16 @@
  * Used by the test-suite and by the app's demo mode: the demo goes through the
  * very same session, file transfer, FIT decoding and import code as a real band.
  */
-import { ByteReader, ByteWriter, concatBytes } from "../bytes";
+import type { FakeFile } from "@bridge/synth/demo/generator";
+import { ByteReader, ByteWriter, concatBytes } from "@bridge/synth/bytes";
 import { CobsStreamDecoder, cobsEncode } from "../garmin/cobs";
-import { crc16 } from "../garmin/crc";
+import { crc16 } from "@bridge/synth/garmin/crc";
 import { Msg, buildMessage, parseMessage } from "../garmin/gfdi";
 import { pbDecode, pbEncode, pbGetMessage } from "../garmin/protobuf";
-import { unixToGarmin } from "../garmin/time";
+import { unixToGarmin } from "@bridge/synth/garmin/time";
 import type { BleTransport } from "../garmin/transport";
 
-export interface FakeFile {
-  dataType: number;
-  subType: number;
-  fileNumber: number;
-  date: number; // unix
-  data: Uint8Array;
-}
+export type { FakeFile };
 
 export interface FakeWatchOptions {
   files: FakeFile[];

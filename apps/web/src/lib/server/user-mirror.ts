@@ -9,7 +9,7 @@
 import type { SqlExecutor } from "@bridge/core/db/sql";
 import { STUDY_TIME_ZONE } from "@bridge/core/time-zone";
 import { loadRange, type RangeData } from "@bridge/core/range-data";
-import { SERVER_TABLES, ServerFormatConverter, type ServerTable } from "./fit-to-server";
+import { SERVER_TABLES, ServerFormatConverter, type ServerTable } from "@bridge/synth/server/fit-to-server";
 import { SERVER_SCHEMA } from "@bridge/core/server/schema";
 import { insertServerRows } from "@bridge/core/server/server-source";
 import { createLocalViews } from "@bridge/core/server/views";

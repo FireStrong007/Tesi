@@ -3,7 +3,7 @@ import { importFit } from "../src/lib/db/importer";
 import { addDays, addDevice, dailyTotals, ensureDefaultUser, fitFileExists, insertFitFile, liveSamples, startOfDay } from "../src/lib/db/repo";
 import { loadDay } from "@bridge/core/day-data";
 import { FakeWatch } from "../src/lib/demo/fake-watch";
-import { generateDemoFiles } from "../src/lib/demo/generator";
+import { generateDemoFiles } from "@bridge/synth/demo/generator";
 import { GarminSession } from "../src/lib/garmin/session";
 import { LiveRecorder } from "../src/lib/live-recorder";
 import { memoryDb } from "./helpers";

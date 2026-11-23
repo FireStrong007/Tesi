@@ -164,3 +164,8 @@
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom);
 }
+/* Edge adds its own "show password" button: the app has one (PasswordInput) */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}

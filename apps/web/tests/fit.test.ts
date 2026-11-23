@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { importFit } from "../src/lib/db/importer";
 import { addDevice, dailyTotals, ensureDemoUser, sleepSessions, startOfDay, addDays, workoutRecords, listWorkouts } from "../src/lib/db/repo";
-import { generateDemoFiles } from "../src/lib/demo/generator";
-import { BaseType as B, decodeFit } from "../src/lib/fit/decoder";
-import { FitEncoder, toGarminTs } from "../src/lib/fit/encoder";
+import { generateDemoFiles } from "@bridge/synth/demo/generator";
+import { BaseType as B, decodeFit } from "@bridge/synth/fit/decoder";
+import { FitEncoder, toGarminTs } from "@bridge/synth/fit/encoder";
 import { memoryDb } from "./helpers";
 
 describe("FIT decoder", () => {

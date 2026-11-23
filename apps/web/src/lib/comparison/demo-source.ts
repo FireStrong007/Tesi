@@ -10,7 +10,7 @@
  */
 import { counterDelta } from "../db/importer";
 import { addDays, startOfDay } from "../db/repo";
-import { DEFAULT_PERSONA, dayRandom, rng, simulateDay, type DemoDay, type Persona } from "../demo/generator";
+import { DEFAULT_PERSONA, dayRandom, rng, simulateDay, type DemoDay, type Persona } from "@bridge/synth/demo/generator";
 import { stats, stressAverage } from "@bridge/core/metrics";
 import { CohortSource } from "@bridge/core/comparison/cohort";
 import { metricValue, type DayFacts } from "@bridge/core/comparison/daily-values";

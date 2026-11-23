@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@bridge/core": "*",
+    "@bridge/synth": "*",
     "@sqlite.org/sqlite-wasm": "^3.50.4-build1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { importFit } from "../src/lib/db/importer";
 import { addDays, addDevice, dailyTotals, ensureDefaultUser, listDevices, sleepSessions, sleepTotal, startOfDay, storeFitFile, tableCounts } from "../src/lib/db/repo";
 import type { SqlExecutor } from "@bridge/core/db/sql";
-import { generateDemoFiles } from "../src/lib/demo/generator";
+import { generateDemoFiles } from "@bridge/synth/demo/generator";
 import type { FakeFile } from "../src/lib/demo/fake-watch";
 import { DeviceManager } from "../src/lib/device-manager";
 import { scanZip, type FitInput } from "../src/lib/gb-import";

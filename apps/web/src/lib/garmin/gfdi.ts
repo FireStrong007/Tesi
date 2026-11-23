@@ -5,9 +5,9 @@
  * Wire format (little endian): u16 length (incl. CRC), u16 type, payload..., u16 crc
  * Ported from Gadgetbridge (AGPL-3.0), see service/devices/garmin/messages.
  */
-import { ByteReader, ByteWriter } from "../bytes";
-import { crc16 } from "./crc";
-import { GARMIN_EPOCH } from "./time";
+import { ByteReader, ByteWriter } from "@bridge/synth/bytes";
+import { crc16 } from "@bridge/synth/garmin/crc";
+import { GARMIN_EPOCH } from "@bridge/synth/garmin/time";
 
 export const Msg = {
   RESPONSE: 5000,

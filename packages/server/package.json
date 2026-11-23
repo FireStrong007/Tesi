@@ -1,0 +1,26 @@
+{
+  "name": "@bridge/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Server di VitaBridge e HeartBridge: legge in sola lettura il database del server dello studio, login dei partecipanti e amministrazione.",
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/server.js",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@bridge/core": "*",
+    "@hono/node-server": "^2.1.11",
+    "hono": "^4.13.21"
+  },
+  "devDependencies": {
+    "@bridge/synth": "*",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15"
+  }
+}

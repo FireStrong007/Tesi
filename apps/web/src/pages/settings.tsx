@@ -1,3 +1,4 @@
+import { AccountCard } from "@/components/account-card";
 import { useEffect, useRef, useState } from "react";
 import { DatabaseIcon, DownloadIcon, ScrollTextIcon, ShieldCheckIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import { navigate } from "@/lib/router";
@@ -87,6 +88,7 @@ export function SettingsPage() {
     <>
       <PageHeader title="Impostazioni" />
       <PageBody>
+        <AccountCard />
         <Card className="gap-4">
           <CardHeader>
             <CardTitle>Profilo</CardTitle>

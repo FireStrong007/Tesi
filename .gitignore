@@ -5,5 +5,7 @@ dist
 # real server databases: personal data, never in git
 data/
 *.db
-# authentication databases written by our server
-auth/
+# authentication databases and downloaded data copies written by our server (root folders only:
+# packages/server/src/auth/ is source code); *.db above covers database files anywhere
+/auth/
+/backup/

@@ -3,7 +3,10 @@ const CACHE = "vitabridge-v1";
 self.addEventListener("install", (e) => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener("fetch", (e) => {
-  if (e.request.method !== "GET" || new URL(e.request.url).origin !== location.origin) return;
+  const url = new URL(e.request.url);
+  if (e.request.method !== "GET" || url.origin !== location.origin) return;
+  // never cache the API: personal data and sessions must not stay in the browser's cache
+  if (url.pathname.includes("/api/")) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {

@@ -22,7 +22,7 @@ import {
 } from "./db/repo";
 import type { SqlExecutor } from "@bridge/core/db/sql";
 import { FakeWatch } from "./demo/fake-watch";
-import { generateDemoFiles } from "./demo/generator";
+import { generateDemoFiles } from "@bridge/synth/demo/generator";
 import type { RealtimeUpdate } from "./garmin/multilink";
 import { GarminSession, type SessionState, type SyncProgress } from "./garmin/session";
 import { WebBluetoothTransport, getPermittedDevices, requestGarminDevice, type BleTransport } from "./garmin/transport";

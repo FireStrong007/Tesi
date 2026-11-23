@@ -1,0 +1,14 @@
+{
+  "name": "@bridge/synth",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Generatore di database sintetici con lo schema dei server Garmin e Gima, e codice FIT (solo per sviluppo e test).",
+  "license": "AGPL-3.0-or-later",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@bridge/core": "*"
+  }
+}

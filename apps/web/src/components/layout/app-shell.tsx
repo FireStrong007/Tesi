@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import { ChartColumnIcon, FlaskConicalIcon, HouseIcon, ScrollTextIcon, SettingsIcon, TimerIcon, WatchIcon } from "lucide-react";
+import { ChartColumnIcon, FlaskConicalIcon, HouseIcon, LogOutIcon, ScrollTextIcon, SettingsIcon, TimerIcon, WatchIcon } from "lucide-react";
 import { useApp, useLive } from "@/app-context";
+import { useAuth, useMe } from "@/auth";
 import { navigate, usePath } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,8 @@ const isActive = (path: string, to: string) => (to === "/" ? path === "/" : path
 export function AppShell({ children }: { children: ReactNode }) {
   const path = usePath();
   const { devices, dbInfo, user, leaveDemo } = useApp();
+  const me = useMe();
+  const { logout } = useAuth();
   const live = useLive();
   const connected = devices.filter((d) => {
     const s = live.get(d.id)?.state;
@@ -63,6 +66,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             {connected.length ? `${connected.length} dispositivo connesso` : "Nessun dispositivo connesso"}
           </div>
           <div>{dbInfo.persistent ? "Database SQLite locale (OPFS)" : "Database temporaneo (in memoria)"}</div>
+          <button onClick={() => void logout()} className="hover:text-foreground mt-2 flex items-center gap-2 font-medium">
+            <LogOutIcon className="size-3.5" /> Esci ({me.account.username})
+          </button>
         </div>
       </aside>
       <div className="min-w-0 flex-1 pb-20 md:pb-0">

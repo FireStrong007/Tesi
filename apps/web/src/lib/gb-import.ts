@@ -12,7 +12,7 @@
  * Those files are byte-for-byte what the band sent, so importing them gives the same data as
  * syncing the band directly. Files already present (same content) are skipped.
  */
-import { decodeFit, num } from "./fit/decoder";
+import { decodeFit, num } from "@bridge/synth/fit/decoder";
 import type { DirectoryEntry } from "./garmin/gfdi";
 import { addDevice, getUser, listDevices, storeFitFile, type Device } from "./db/repo";
 import type { SqlExecutor } from "@bridge/core/db/sql";

@@ -5,7 +5,7 @@ import { DemoComparisonSource, demoCohort } from "../src/lib/comparison/demo-sou
 import { COMPARE_METRICS } from "@bridge/core/comparison/types";
 import { importFit } from "../src/lib/db/importer";
 import { addDays, addDevice, ensureDefaultUser, startOfDay } from "../src/lib/db/repo";
-import { generateDemoFiles } from "../src/lib/demo/generator";
+import { generateDemoFiles } from "@bridge/synth/demo/generator";
 import { MIN_VALID_DAYS, VALID_DAY_MIN_HR_HOURS, isValidDay } from "@bridge/core/metrics";
 import { loadRange } from "@bridge/core/range-data";
 import { memoryDb } from "./helpers";

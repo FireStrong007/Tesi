@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2Icon, PhoneIcon, TriangleAlertIcon } from "lucide-react";
 import { AppProvider, useApp } from "@/app-context";
+import { AuthProvider, useAuth } from "@/auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Toaster, toast } from "@/components/ui/sonner";
 import { match, usePath } from "@/lib/router";
+import { AdminApp } from "@/pages/admin";
+import { ForcedPasswordChangePage } from "@/pages/change-password";
 import { ChartsPage } from "@/pages/charts";
 import { DashboardPage } from "@/pages/dashboard";
 import { DeviceSettingsPage } from "@/pages/device-settings";
 import { DevicesPage } from "@/pages/devices";
+import { LoginPage } from "@/pages/login";
 import { LogsPage } from "@/pages/logs";
 import { SettingsPage } from "@/pages/settings";
 import { WorkoutDetailPage, WorkoutsPage } from "@/pages/workouts";
@@ -123,7 +127,8 @@ function Splash({ error }: { error: Error | null }) {
   );
 }
 
-export default function App() {
+/** The participant's app (until Fase 3 still the local one, with the band and the demo). */
+function ParticipantApp() {
   return (
     <AppProvider fallback={(e) => <Splash error={e} />}>
       <AppShell>
@@ -131,7 +136,34 @@ export default function App() {
       </AppShell>
       <FindPhone />
       <SyncResults />
-      <Toaster />
     </AppProvider>
+  );
+}
+
+/** Login first; then the screen of the account's role. */
+function Gate() {
+  const { state, reload } = useAuth();
+  if (state.status === "loading") return <Splash error={null} />;
+  if (state.status === "offline")
+    return (
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 p-6 text-center">
+        <img src="icon.svg" alt="" className="size-14" />
+        <TriangleAlertIcon className="text-destructive size-6" />
+        <div className="font-semibold">Il server non risponde</div>
+        <div className="text-muted-foreground max-w-sm text-sm">{state.message}</div>
+        <Button onClick={() => void reload()}>Riprova</Button>
+      </div>
+    );
+  if (state.status === "anonymous") return <LoginPage expired={state.reason === "expired"} />;
+  if (state.me.account.mustChangePassword) return <ForcedPasswordChangePage />;
+  return state.me.account.role === "admin" ? <AdminApp /> : <ParticipantApp />;
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <Gate />
+      <Toaster />
+    </AuthProvider>
   );
 }

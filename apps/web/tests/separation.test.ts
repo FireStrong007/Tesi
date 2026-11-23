@@ -5,7 +5,7 @@ import { checkSchema, migrate } from "../src/lib/db/migrate";
 import { addDays, addDevice, ensureDefaultUser, ensureDemoUser, listDevices, shareableUsers, startOfDay, storeFitFile } from "../src/lib/db/repo";
 import { MIGRATIONS } from "../src/lib/db/schema";
 import { oo1All, oo1Executor, type Oo1Db } from "@bridge/core/db/sql";
-import { generateDemoFiles } from "../src/lib/demo/generator";
+import { generateDemoFiles } from "@bridge/synth/demo/generator";
 import { storeFitInputs } from "../src/lib/gb-import";
 import { loadRange } from "@bridge/core/range-data";
 import { memoryDb } from "./helpers";
