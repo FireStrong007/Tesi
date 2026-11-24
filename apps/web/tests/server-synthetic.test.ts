@@ -16,7 +16,7 @@ import { fitToServerRows, type Row } from "@bridge/synth/server/fit-to-server";
 import { SERVER_SCHEMA } from "@bridge/core/server/schema";
 import { insertServerRows } from "@bridge/core/server/server-source";
 import { createLocalViews } from "@bridge/core/server/views";
-import { STUDY_TIME_ZONE, processUsesZone, zoneTransitions } from "@bridge/core/time-zone";
+import { zoneTransitions } from "@bridge/core/time-zone";
 import { memoryDb } from "./helpers";
 
 const OFFSET = 9 * 3600; // the band's clock: Asia/Tokyo, no daylight saving
@@ -190,12 +190,5 @@ describe("time zone of the views", () => {
       [Date.UTC(2026, 9, 25, 1) / 1000, 3600],
     ]);
     expect(zoneTransitions("Asia/Tokyo", 2026, 2027)).toEqual([[Date.UTC(2026, 0, 1) / 1000, 9 * 3600]]);
-  });
-
-  it("the tests run, like the server must, in the study's time zone", () => {
-    expect(STUDY_TIME_ZONE).toBe("Europe/Rome");
-    expect(processUsesZone(STUDY_TIME_ZONE)).toBe(true);
-    expect(processUsesZone("Asia/Tokyo")).toBe(false);
-    expect(processUsesZone("Europe/London")).toBe(false);
   });
 });

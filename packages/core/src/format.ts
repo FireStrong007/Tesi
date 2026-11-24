@@ -1,3 +1,8 @@
+import { STUDY_TIME_ZONE, localParts } from "./time-zone";
+
+// dates and times are always shown in the study's time zone, whatever the device's
+const TZ = { timeZone: STUDY_TIME_ZONE } as const;
+
 // "always": 4.106 like Gadgetbridge (Italian default groups only from 5 digits)
 const nf = new Intl.NumberFormat("it-IT", { useGrouping: "always" } as unknown as Intl.NumberFormatOptions);
 const nf1 = new Intl.NumberFormat("it-IT", { maximumFractionDigits: 1 });
@@ -28,24 +33,24 @@ export function fmtDuration(sec: number | null | undefined) {
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}` : `${m}:${String(ss).padStart(2, "0")}`;
 }
 
-export const fmtTime = (ts: number) => new Date(ts * 1000).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
-export const fmtDay = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { weekday: "short", day: "numeric", month: "short" });
-export const fmtDayLong = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+export const fmtTime = (ts: number) => new Date(ts * 1000).toLocaleTimeString("it-IT", { ...TZ, hour: "2-digit", minute: "2-digit" });
+export const fmtDay = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "short", day: "numeric", month: "short" });
+export const fmtDayLong = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "long", day: "numeric", month: "long", year: "numeric" });
 export const fmtDateTime = (ts: number) =>
-  new Date(ts * 1000).toLocaleString("it-IT", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-export const fmtWeekday = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { weekday: "narrow" });
-export const fmtDayNum = (ts: number) => new Date(ts * 1000).getDate().toString();
+  new Date(ts * 1000).toLocaleString("it-IT", { ...TZ, day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+export const fmtWeekday = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "narrow" });
+export const fmtDayNum = (ts: number) => String(localParts(ts).day);
 /** "27 ott" */
-export const fmtDayMonth = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { day: "numeric", month: "short" });
+export const fmtDayMonth = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, day: "numeric", month: "short" });
 /** "Novembre", with the year when it is not the current one ("Dicembre 2025") */
 export const fmtMonth = (ts: number) => {
-  const d = new Date(ts * 1000);
-  const s = d.toLocaleDateString("it-IT", d.getFullYear() === new Date().getFullYear() ? { month: "long" } : { month: "long", year: "numeric" });
+  const sameYear = localParts(ts).year === localParts(Date.now() / 1000).year;
+  const s = new Date(ts * 1000).toLocaleDateString("it-IT", sameYear ? { ...TZ, month: "long" } : { ...TZ, month: "long", year: "numeric" });
   return s.charAt(0).toUpperCase() + s.slice(1);
 };
 /** "Martedì 27 ottobre" */
 export const fmtDayTitle = (ts: number) => {
-  const s = new Date(ts * 1000).toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" });
+  const s = new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "long", day: "numeric", month: "long" });
   return s.charAt(0).toUpperCase() + s.slice(1);
 };
 

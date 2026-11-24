@@ -10,7 +10,7 @@ import type { CompareMetric, ComparisonQuery } from "../comparison/types";
 import { addDays } from "../db/queries";
 import type { SqlExecutor } from "../db/sql";
 import { loadRange, type RangeData } from "../range-data";
-import { STUDY_TIME_ZONE, processUsesZone } from "../time-zone";
+import { STUDY_TIME_ZONE } from "../time-zone";
 import { SERVER_TABLES, type Row, type ServerTable } from "./schema";
 import { createLocalViews } from "./views";
 
@@ -58,10 +58,8 @@ export class ServerComparisonSource extends CohortSource {
     super(now);
   }
 
-  /** Opens the snapshot; the process must run in the study's time zone (e.g. TZ=Europe/Rome). */
+  /** Opens the snapshot (days in the study's time zone, whatever the process's own zone). */
   static async open(dbs: SqlExecutor[], now?: () => number) {
-    if (!processUsesZone(STUDY_TIME_ZONE))
-      throw new Error(`Il confronto sul server deve girare con il fuso dello studio: avvia Node con TZ=${STUDY_TIME_ZONE}`);
     return new ServerComparisonSource(await participantsOf(dbs, { materialize: true, timeZone: STUDY_TIME_ZONE }), dbs, now);
   }
 

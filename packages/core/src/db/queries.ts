@@ -5,21 +5,12 @@
  */
 import { asleepMinutes } from "../metrics";
 import type { SqlExecutor } from "./sql";
+import { addDays, startOfDay } from "../time-zone";
 
 // ------------------------------------------------------------------ time helpers
 
-export const startOfDay = (ts: number) => {
-  const d = new Date(ts * 1000);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000;
-};
-export const addDays = (dayStart: number, n: number) => {
-  const d = new Date(dayStart * 1000);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n).getTime() / 1000;
-};
-export const dayKey = (ts: number) => {
-  const d = new Date(ts * 1000);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+// days of the study's time zone (time-zone.ts), re-exported for the queries' users
+export { addDays, dayKey, startOfDay } from "../time-zone";
 
 // ------------------------------------------------------------------ activity
 

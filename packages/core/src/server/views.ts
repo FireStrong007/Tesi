@@ -9,9 +9,8 @@
  * The local day that splits the band's day counters comes from an explicit time zone (option
  * `timeZone`, by default the study's: Europe/Rome for every participant), never from the
  * server's own 'localtime': SQLite knows no time zones, so createLocalViews writes the zone's UTC
- * offsets (daylight saving included) into the TEMP table tz_offset.
- * loadRange groups days with the time zone of the process that runs it: the server comparison
- * refuses to start unless that is the study's zone (see ServerComparisonSource.open).
+ * offsets (daylight saving included) into the TEMP table tz_offset. loadRange groups days with the
+ * same zone (time-zone.ts), whatever the zone of the browser or of the process.
  */
 import type { SqlExecutor } from "../db/sql";
 import { STUDY_TIME_ZONE, zoneTransitions } from "../time-zone";

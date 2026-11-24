@@ -57,7 +57,7 @@ import {
   type PeriodStanding,
 } from "@/lib/comparison";
 import { loadDay, type DayData } from "@bridge/core/day-data";
-import { sleepTotal, startOfDay, type User } from "@/lib/db/repo";
+import { addDays, sleepTotal, startOfDay, type User } from "@/lib/db/repo";
 import { fmtDay, fmtDayLong, fmtDayMonth, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
 import { STRESS_LEVELS, STRESS_MIN_VALID, VALID_DAY_MIN_HR_HOURS, estimateBmr, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@bridge/core/metrics";
 import { loadRange, type DayAgg, type RangeData } from "@bridge/core/range-data";
@@ -951,10 +951,8 @@ function invalidNote(r: RangeData, i: number): TipLine[] | undefined {
   return [{ text: `Indossato ${r.hrHours[i]} h su ${VALID_DAY_MIN_HR_HOURS}: escluso dalle medie`, sub: true }];
 }
 
-const addDaysLocal = (d: number, n: number) => {
-  const x = new Date(d * 1000);
-  return new Date(x.getFullYear(), x.getMonth(), x.getDate() + n).getTime() / 1000;
-};
+// midnight n days after the day of d, in the study's time zone
+const addDaysLocal = (d: number, n: number) => addDays(startOfDay(d), n);
 
 interface RangeViewSpec {
   hasData: boolean;

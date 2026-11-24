@@ -8,12 +8,13 @@
  * so moving the finger only re-renders the cursor and the tooltip.
  */
 import type { MinuteSlot } from "@bridge/core/day-data";
+import { localParts } from "@bridge/core/time-zone";
 import { useId, useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSize } from "@/hooks/use-size";
 import { cn } from "@/lib/utils";
-import { fmt1, fmtDuration, fmtInt, fmtTime } from "@bridge/core/format";
+import { fmt1, fmtDayMonth, fmtDuration, fmtInt, fmtTime } from "@bridge/core/format";
 import type { SleepSegment, TimeValue } from "@/lib/db/repo";
 import { nearestPoint, pointAtOrBefore, useChartInteraction, visibleSlice, type ChartInteraction, type TimeWindow } from "./interaction";
 
@@ -44,7 +45,7 @@ const niceMax = (v: number) => {
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
 };
 
-const fmtShortDate = (t: number) => new Date(t * 1000).toLocaleDateString("it-IT", { day: "numeric", month: "short" });
+const fmtShortDate = fmtDayMonth;
 const hoursLabel = (w: TimeWindow) => `${fmtTime(w.from)}–${fmtTime(w.to)}`;
 
 /**
@@ -163,16 +164,15 @@ const HOUR_STEPS = [300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400]
 function hourTicks(from: number, to: number, plotW: number, wide: boolean) {
   const maxLabels = Math.max(2, Math.floor(plotW / (wide ? 64 : 40)));
   const step = HOUR_STEPS.find((s) => (to - from) / s <= maxLabels) ?? 86400;
-  const d = new Date(from * 1000);
-  d.setMinutes(0, 0, 0);
+  // the study's zone is a whole number of hours from UTC: its hours start on UTC hours
   const ticks: number[] = [];
-  const start = d.getTime() / 1000;
+  const start = Math.floor(from / 3600) * 3600;
   if (step < 3600) {
     for (let t = start; t <= to; t += step) if (t >= from) ticks.push(t);
   } else {
-    for (let t = start; t <= to; t += 3600) if (t >= from && new Date(t * 1000).getHours() % (step / 3600) === 0) ticks.push(t);
+    for (let t = start; t <= to; t += 3600) if (t >= from && localParts(t).hour % (step / 3600) === 0) ticks.push(t);
   }
-  const label = (t: number) => (step < 3600 || wide ? fmtTime(t) : String(new Date(t * 1000).getHours()));
+  const label = (t: number) => (step < 3600 || wide ? fmtTime(t) : String(localParts(t).hour));
   return { ticks, label };
 }
 
@@ -670,7 +670,7 @@ export function TimeChart({
         ))}
         {ticks.map((t) => (
           <text key={t} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
-            {hours ? hours.label(t) : xTicks === "elapsed" ? fmtDuration(t - from) : new Date(t * 1000).getDate()}
+            {hours ? hours.label(t) : xTicks === "elapsed" ? fmtDuration(t - from) : localParts(t).day}
           </text>
         ))}
       </g>

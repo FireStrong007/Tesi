@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { addDays, startOfDay } from "@/lib/db/repo";
 import { fmtDay, fmtDayLong, fmtMonth } from "@bridge/core/format";
 import { cn } from "@/lib/utils";
+import { dayKey, fromDayKey, monthStart, weekStart } from "@bridge/core/time-zone";
 
 export function PageHeader({ title, subtitle, back, actions, wide }: { title: ReactNode; subtitle?: ReactNode; back?: () => void; actions?: ReactNode; wide?: boolean }) {
   return (
@@ -35,22 +36,15 @@ export function periodRange(period: Period, anchor: number): { from: number; to:
   const day = startOfDay(anchor);
   if (period === "day") return { from: day, to: addDays(day, 1) };
   if (period === "week") {
-    const monday = addDays(day, -((new Date(day * 1000).getDay() + 6) % 7));
+    const monday = weekStart(day);
     return { from: monday, to: addDays(monday, 7) };
   }
   return { from: monthStart(day, 0), to: monthStart(day, 1) };
 }
 
-/** local midnight of the 1st of the month `n` months after the one containing `day` */
-export const monthStart = (day: number, n: number) => {
-  const d = new Date(day * 1000);
-  return new Date(d.getFullYear(), d.getMonth() + n, 1).getTime() / 1000;
-};
-
-const isoDate = (day: number) => {
-  const d = new Date(day * 1000);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+// days, weeks and months of the study's time zone (Europe/Rome), whatever the device's zone
+export { monthStart };
+const isoDate = dayKey;
 
 /**
  * Date navigation: two arrows that move by the period (a day, a Monday–Sunday week, a calendar
@@ -81,8 +75,7 @@ export function DateNav({ day, onChange, period = "day", compact = false }: { da
           value={isoDate(day)}
           onChange={(e) => {
             if (!e.target.value) return;
-            const [y, m, dd] = e.target.value.split("-").map(Number);
-            go(new Date(y, m - 1, dd).getTime() / 1000);
+            go(fromDayKey(e.target.value));
           }}
           onClick={(e) => {
             try {

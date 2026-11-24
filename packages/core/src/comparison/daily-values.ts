@@ -5,6 +5,7 @@
 import { addDays, startOfDay } from "../db/queries";
 import { asleepMinutes, intensityScore, isValidDay } from "../metrics";
 import type { RangeData } from "../range-data";
+import { weekStart } from "../time-zone";
 import type { CompareMetric } from "./types";
 
 /** What is known about one person's day; null fields = no data. */
@@ -90,11 +91,8 @@ export const userDailyValues = (metric: CompareMetric, r: RangeData) => r.days.m
 /** Metrics compared as weekly totals (Monday–Sunday) instead of daily values. */
 export const WEEKLY_METRICS: ReadonlySet<CompareMetric> = new Set<CompareMetric>(["intensity"]);
 
-/** Local Monday 00:00 of the week containing day `d`. */
-export function mondayOf(d: number): number {
-  const day = startOfDay(d);
-  return addDays(day, -((new Date(day * 1000).getDay() + 6) % 7));
-}
+/** Monday 00:00 (study's time zone) of the week containing day `d`. */
+export const mondayOf = (d: number): number => weekStart(d);
 
 /** Monday-aligned weeks covering [from, to): the range grown to whole weeks. */
 export function weeksCovering(from: number, to: number): { start: number; end: number }[] {
