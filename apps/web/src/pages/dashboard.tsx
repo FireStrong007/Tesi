@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useQuery } from "@/hooks/use-query";
 import { loadDay } from "@bridge/core/day-data";
-import { fmtDateTime, fmtDistance, fmtInt, fmtMinutes, fmt1 } from "@bridge/core/format";
+import { estimatedLabel, fmtDateTime, fmtDistance, fmtInt, fmtMinutes, fmt1 } from "@bridge/core/format";
 import { restingCalories, stressLevelOf } from "@bridge/core/metrics";
 import { startOfDay } from "@bridge/core/time-zone";
 import { NEVER_SHORT } from "@/lib/empty-states";
@@ -89,7 +89,7 @@ export function DashboardPage() {
               </DayRing>
             </button>
             <div className="grid w-full flex-1 grid-cols-3 gap-4 sm:grid-cols-2">
-              <MiniStat label="Distanza" value={fmtDistance(d?.distanceM ?? 0)} />
+              <MiniStat label={estimatedLabel("Distanza", d?.distanceM ?? 0, d?.distanceEstimatedM ?? 0)} value={fmtDistance(d?.distanceM ?? 0)} />
               <MiniStat label="Minuti attivi" value={fmtInt(d?.activeMinutes ?? 0)} />
               <MiniStat label="Calorie attive" value={`${fmtInt(d?.activeCalories ?? 0)} kcal`} />
               <MiniStat label="Sonno" value={d?.sleep ? fmtMinutes(d.sleepMinutes) : "–"} className="hidden sm:block" />

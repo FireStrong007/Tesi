@@ -84,3 +84,12 @@ export function fmtBytes(n: number) {
   if (n < 1024 * 1024) return `${nf1.format(n / 1024)} KB`;
   return `${nf1.format(n / 1024 / 1024)} MB`;
 }
+
+/**
+ * The label of a distance that may contain an estimate (steps with no measured distance):
+ * "Distanza", "Distanza (in parte stimata)" or "Distanza (stimata)".
+ */
+export function estimatedLabel(label: string, total: number, estimated: number) {
+  if (!(estimated > 0.5)) return label;
+  return estimated >= total - 0.5 ? `${label} (stimata)` : `${label} (in parte stimata)`;
+}

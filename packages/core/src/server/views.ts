@@ -14,6 +14,7 @@
  */
 import type { SqlExecutor } from "../db/sql";
 import { STUDY_TIME_ZONE, zoneTransitions } from "../time-zone";
+import { MIN_STRIDE_MINUTES, MIN_STRIDE_STEPS } from "../metrics";
 import { ActivityKind, NOT_MEASURED } from "./schema";
 
 /**
@@ -24,7 +25,11 @@ import { ActivityKind, NOT_MEASURED } from "./schema";
  *    day (LAG over the measured rows only); the first measured value of a day is the counter itself
  *    (counters restart at midnight); a counter that goes down gives NULL and becomes the new base;
  *  - like the app's importer (and Gadgetbridge when it reads), the counter read at t covers the
- *    minute before it: rows move to t - 60, so the sample at midnight closes the previous day.
+ *    minute before it: rows move to t - 60, so the sample at midnight closes the previous day;
+ *  - distance_missing = 1 when no measured DISTANCE_CM comes at or after the minute on the same
+ *    day: its steps have no distance at all (Gadgetbridge often stores -1), and the queries add an
+ *    estimate for them (db/queries.ts, person_stride). Distance the counter carries to a later
+ *    measured minute is not missing: it is in that minute's delta.
  */
 const COUNTERS = [
   ["STEPS", "steps"],
@@ -41,9 +46,11 @@ SELECT DEVICE_ID AS device_id, USER_ID AS user_id, TIMESTAMP - 60 AS timestamp,
   NULL AS activity_type,
   NULLIF(RAW_INTENSITY, ${NOT_MEASURED}) AS intensity,
   ${COUNTERS.map(([c, ours]) => `CASE WHEN ${c} < 0 THEN NULL WHEN p_${c} IS NULL THEN ${c} WHEN ${c} >= p_${c} THEN ${c} - p_${c} END AS ${ours}`).join(", ")},
-  NULLIF(HEART_RATE, ${NOT_MEASURED}) AS heart_rate
+  NULLIF(HEART_RATE, ${NOT_MEASURED}) AS heart_rate,
+  CASE WHEN last_distance IS NULL OR TIMESTAMP > last_distance THEN 1 ELSE 0 END AS distance_missing
 FROM (
-  SELECT *, ${COUNTERS.map(([c]) => `LAG(v_${c}) OVER w AS p_${c}`).join(", ")}
+  SELECT *, ${COUNTERS.map(([c]) => `LAG(v_${c}) OVER w AS p_${c}`).join(", ")},
+    MAX(CASE WHEN DISTANCE_CM >= 0 THEN TIMESTAMP END) OVER (PARTITION BY USER_ID, DEVICE_ID, day) AS last_distance
   FROM (
     SELECT *, ${COUNTERS.map(([c]) => `MAX(CASE WHEN ${c} >= 0 THEN ${c} END) OVER (PARTITION BY USER_ID, DEVICE_ID, day, g_${c}) AS v_${c}`).join(", ")}
     FROM (
@@ -85,6 +92,8 @@ export interface LocalView {
   time?: string;
   /** column whose value ≥ from marks the rows a partial update replaces (default: timestamp) */
   updatedBy?: string;
+  /** an aggregate over other app tables: a partial update recomputes it in full, after them */
+  whole?: boolean;
 }
 
 export const LOCAL_VIEWS: LocalView[] = [
@@ -131,6 +140,18 @@ export const LOCAL_VIEWS: LocalView[] = [
           AND s.TIMESTAMP < e.TIMESTAMP AND s.TIMESTAMP > e.TIMESTAMP - 86400000) AS start
      FROM GARMIN_EVENT_SAMPLE e WHERE e.EVENT = 74 AND e.EVENT_TYPE = 1
    ) WHERE start IS NOT NULL${from == null ? "" : ` AND "end" >= ${from}`}`,
+  },
+  // each person's average step length (cm) from the minutes whose steps are covered by measured
+  // distance; NULL with too few of them (the queries then use DEFAULT_STRIDE_CM). Aggregate over
+  // all the person's days: always recomputed in full.
+  {
+    name: "person_stride",
+    time: "stride_cm",
+    whole: true,
+    select: () => `SELECT user_id,
+      CASE WHEN SUM(steps > 0 AND distance_missing = 0) >= ${MIN_STRIDE_MINUTES} AND SUM(CASE WHEN distance_missing = 0 THEN steps ELSE 0 END) >= ${MIN_STRIDE_STEPS}
+        THEN SUM(COALESCE(distance_cm, 0)) * 1.0 / SUM(CASE WHEN distance_missing = 0 THEN steps ELSE 0 END) END AS stride_cm
+      FROM activity_sample GROUP BY user_id`,
   },
   // not in the server format: the app's live minutes and restless moments
   emptyView("live_sample", ["device_id", "user_id", "timestamp", "heart_rate", "steps", "body_battery", "respiration", "spo2"]),
@@ -183,6 +204,7 @@ export async function updateLocalTables(db: SqlExecutor, opts: { from: number | 
         { sql: `CREATE TABLE main.${v.name} AS ${v.select(null)}` },
         { sql: `CREATE INDEX main.${v.name}_user_time ON ${v.name} (user_id, ${v.time ?? "timestamp"})` },
       ]);
+    else if (v.whole) await db.batch([{ sql: `DELETE FROM main.${v.name}` }, { sql: `INSERT INTO main.${v.name} SELECT * FROM (${v.select(null)})` }]);
     else
       await db.batch([
         { sql: `DELETE FROM main.${v.name} WHERE ${v.updatedBy ?? "timestamp"} >= ?`, params: [opts.from] },

@@ -131,6 +131,18 @@ export function setValidDayHours(hours: number) {
 }
 export const isValidDay = (hoursWithHeartRate: number) => hoursWithHeartRate >= validDayHours;
 
+// ------------------------------------------------------------------ estimated distance
+
+/**
+ * Distance for steps with no measured distance (the research server's Gadgetbridge rows often have
+ * none): steps × the person's average step length, from their minutes with both values when they
+ * have at least MIN_STRIDE_MINUTES of them and MIN_STRIDE_STEPS steps in them, otherwise
+ * DEFAULT_STRIDE_CM. The same rule for every person (server/views.ts person_stride, db/queries.ts).
+ */
+export const DEFAULT_STRIDE_CM = 75;
+export const MIN_STRIDE_MINUTES = 60;
+export const MIN_STRIDE_STEPS = 1000;
+
 /** The summary judgement against other users needs at least this many valid days in the period. */
 export const MIN_VALID_DAYS = 7;
 

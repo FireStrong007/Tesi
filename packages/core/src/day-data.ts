@@ -36,7 +36,10 @@ export interface DayData {
   to: number;
   samples: ActivityRow[];
   steps: number;
+  /** measured plus estimated distance (steps with no measured distance) */
   distanceM: number;
+  /** the estimated part of distanceM */
+  distanceEstimatedM: number;
   activeCalories: number;
   activeMinutes: number;
   intensityModerate: number;
@@ -112,6 +115,7 @@ export async function loadDay(db: SqlExecutor, userId: number, from: number): Pr
       intensity: l.steps >= 100 ? 2 : l.steps >= 30 ? 1 : 0,
       activity_type: null,
       distance_cm: 0,
+      distance_est_cm: 0,
       active_calories: 0,
     })),
   ].sort((a, b) => a.timestamp - b.timestamp);
@@ -196,6 +200,7 @@ export async function loadDay(db: SqlExecutor, userId: number, from: number): Pr
     samples,
     steps,
     distanceM: samples.reduce((s, r) => s + r.distance_cm, 0) / 100,
+    distanceEstimatedM: samples.reduce((s, r) => s + r.distance_est_cm, 0) / 100,
     activeCalories: samples.reduce((s, r) => s + r.active_calories, 0),
     activeMinutes,
     intensityModerate: im.reduce((s, r) => s + r.moderate, 0),

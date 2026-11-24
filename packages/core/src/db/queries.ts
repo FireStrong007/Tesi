@@ -3,7 +3,7 @@
  * and the server. All functions take a SqlExecutor, so they run on the browser's OPFS database, on
  * an in-memory database in tests and on the server's views (server/views.ts).
  */
-import { asleepMinutes } from "../metrics";
+import { DEFAULT_STRIDE_CM, asleepMinutes } from "../metrics";
 import type { SqlExecutor } from "./sql";
 import { addDays, startOfDay } from "../time-zone";
 
@@ -20,13 +20,24 @@ export interface ActivityRow {
   heart_rate: number | null;
   intensity: number | null;
   activity_type: number | null;
+  /** measured distance plus, for steps with none, the estimate (distance_est_cm) */
   distance_cm: number;
+  /** the estimated part of distance_cm (metrics.DEFAULT_STRIDE_CM, views person_stride) */
+  distance_est_cm: number;
   active_calories: number;
 }
 
+/**
+ * Estimated distance of a minute whose steps have no measured distance (activity_sample.
+ * distance_missing): steps × the person's average step length, or DEFAULT_STRIDE_CM. ?1 = user id.
+ */
+const ESTIMATE_SQL = `(CASE WHEN distance_missing = 1 AND steps > 0
+  THEN ROUND(steps * COALESCE((SELECT stride_cm FROM person_stride WHERE user_id = ?1), ${DEFAULT_STRIDE_CM})) ELSE 0 END)`;
+
 export async function activitySamples(db: SqlExecutor, userId: number, from: number, to: number): Promise<ActivityRow[]> {
   return db.all<ActivityRow>(
-    "SELECT timestamp, steps, heart_rate, intensity, activity_type, distance_cm, active_calories FROM activity_sample WHERE user_id = ? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp",
+    `SELECT timestamp, steps, heart_rate, intensity, activity_type, COALESCE(distance_cm, 0) + ${ESTIMATE_SQL} AS distance_cm, ${ESTIMATE_SQL} AS distance_est_cm, active_calories
+     FROM activity_sample WHERE user_id = ?1 AND timestamp >= ?2 AND timestamp < ?3 ORDER BY timestamp`,
     [userId, from, to],
   );
 }
@@ -34,31 +45,36 @@ export async function activitySamples(db: SqlExecutor, userId: number, from: num
 export interface DayTotals {
   day: number; // local start of day (unix)
   steps: number;
+  /** measured plus estimated distance */
   distance_m: number;
+  /** the estimated part of distance_m */
+  distance_estimated_m: number;
   calories: number;
   active_minutes: number;
 }
 
 /** Totals per local day, aggregated per hour in SQL and folded into days in JS (DST-safe). */
 export async function dailyTotals(db: SqlExecutor, userId: number, fromDay: number, toDay: number): Promise<DayTotals[]> {
-  const rows = await db.all<{ h: number; steps: number; dist: number; cal: number; active: number }>(
-    `SELECT (timestamp / 3600) AS h, SUM(steps) AS steps, SUM(distance_cm) AS dist, SUM(active_calories) AS cal,
+  const rows = await db.all<{ h: number; steps: number; dist: number; est: number; cal: number; active: number }>(
+    `SELECT (timestamp / 3600) AS h, SUM(steps) AS steps, SUM(distance_cm) AS dist, SUM(est) AS est, SUM(active_calories) AS cal,
             SUM(CASE WHEN intensity >= 2 OR steps >= 60 THEN 1 ELSE 0 END) AS active
      FROM (
-       SELECT timestamp, steps, distance_cm, active_calories, intensity FROM activity_sample WHERE user_id = ?1 AND timestamp >= ?2 AND timestamp < ?3
+       SELECT timestamp, steps, COALESCE(distance_cm, 0) + ${ESTIMATE_SQL} AS distance_cm, ${ESTIMATE_SQL} AS est, active_calories, intensity
+       FROM activity_sample WHERE user_id = ?1 AND timestamp >= ?2 AND timestamp < ?3
        UNION ALL
-       SELECT timestamp, steps, 0, 0, NULL FROM live_sample WHERE user_id = ?1 AND timestamp >= ?2 AND timestamp < ?3 AND timestamp > ${COVERAGE_SQL}
+       SELECT timestamp, steps, 0, 0, 0, NULL FROM live_sample WHERE user_id = ?1 AND timestamp >= ?2 AND timestamp < ?3 AND timestamp > ${COVERAGE_SQL}
      ) GROUP BY h`,
     [userId, fromDay, toDay],
   );
   const map = new Map<number, DayTotals>();
-  for (let d = fromDay; d < toDay; d = addDays(d, 1)) map.set(d, { day: d, steps: 0, distance_m: 0, calories: 0, active_minutes: 0 });
+  for (let d = fromDay; d < toDay; d = addDays(d, 1)) map.set(d, { day: d, steps: 0, distance_m: 0, distance_estimated_m: 0, calories: 0, active_minutes: 0 });
   for (const r of rows) {
     const day = startOfDay(r.h * 3600);
     const t = map.get(day);
     if (!t) continue;
     t.steps += r.steps;
     t.distance_m += r.dist / 100;
+    t.distance_estimated_m += r.est / 100;
     t.calories += r.cal;
     t.active_minutes += r.active;
   }

@@ -60,7 +60,7 @@ import {
 } from "@/lib/comparison";
 import { loadDay, type DayData } from "@bridge/core/day-data";
 import { addDays, sleepTotal, startOfDay } from "@bridge/core/db/queries";
-import { fmtDay, fmtDayLong, fmtDayMonth, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
+import { estimatedLabel, fmtDay, fmtDayLong, fmtDayMonth, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
 import { STRESS_LEVELS, STRESS_MIN_VALID, getValidDayHours, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@bridge/core/metrics";
 import { loadRange, type DayAgg, type RangeData } from "@bridge/core/range-data";
 import { navigate, query, usePath } from "@/lib/router";
@@ -303,7 +303,7 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
             <SummaryCard title={dateTitle} gauge={<GoalRing value={d.steps} goal={user.step_goal} color="var(--steps)" size={170} stroke={14}><Center value={fmtInt(d.steps)} label={`di ${fmtInt(user.step_goal)} passi`} /></GoalRing>}>
               <Tiles
                 items={[
-                  { label: "Distanza", value: fmtDistance(d.distanceM), color: "var(--steps)" },
+                  { label: estimatedLabel("Distanza", d.distanceM, d.distanceEstimatedM), value: fmtDistance(d.distanceM), color: "var(--steps)" },
                   { label: "Sonno", value: d.sleep ? fmtMinutes(d.sleepMinutes) : "–", color: STAGE_COLOR[3] },
                   { label: "Battito medio", value: fmtInt(d.hrAvg), unit: "bpm", color: "var(--heart)" },
                   { label: "Minuti attivi", value: fmtInt(d.activeMinutes), color: "var(--calories)" },
@@ -353,7 +353,7 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
               <Tiles
                 items={[
                   { label: "Passi", value: fmtInt(d.steps), color: "var(--steps)" },
-                  { label: "Distanza", value: fmtDistance(d.distanceM), color: "var(--steps)" },
+                  { label: estimatedLabel("Distanza", d.distanceM, d.distanceEstimatedM), value: fmtDistance(d.distanceM), color: "var(--steps)" },
                   { label: "Minuti attivi", value: fmtInt(d.activeMinutes) },
                   { label: "Calorie attive", value: fmtInt(d.activeCalories), unit: "kcal" },
                 ]}
@@ -1010,6 +1010,7 @@ function buildRange(tab: MetricId, r: RangeData, user: Person, labelOf: (d: numb
     case "steps": {
       const total = r.totals.reduce((s, t) => s + t.steps, 0);
       const dist = r.totals.reduce((s, t) => s + t.distance_m, 0);
+      const distEst = r.totals.reduce((s, t) => s + t.distance_estimated_m, 0);
       // averages over the valid days only: a day without the band is not a day with 0 steps
       const active = r.totals.filter((_, i) => r.valid[i]);
       const avg = active.length ? active.reduce((s, t) => s + t.steps, 0) / active.length : 0;
@@ -1020,8 +1021,8 @@ function buildRange(tab: MetricId, r: RangeData, user: Person, labelOf: (d: numb
         tiles: [
           { label: "Passi totali", value: fmtInt(total), color: "var(--steps)" },
           { label: "Obiettivo raggiunto", value: `${r.totals.filter((t) => t.steps >= user.step_goal).length}/${elapsed}`, unit: "giorni" },
-          { label: "Distanza media", value: fmtDistance(active.length ? active.reduce((s, t) => s + t.distance_m, 0) / active.length : 0) },
-          { label: "Distanza totale", value: fmtDistance(dist) },
+          { label: estimatedLabel("Distanza media", dist, distEst), value: fmtDistance(active.length ? active.reduce((s, t) => s + t.distance_m, 0) / active.length : 0) },
+          { label: estimatedLabel("Distanza totale", dist, distEst), value: fmtDistance(dist) },
         ],
         chartTitle: "Passi al giorno",
         items: r.totals.map((t, i) => ({

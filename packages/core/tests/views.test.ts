@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import { demoCohort } from "@bridge/synth/demo/cohort";
 import { generateDemoFiles } from "@bridge/synth/demo/generator";
 import { fitToServerRows, type Row } from "@bridge/synth/server/fit-to-server";
-import { addDays, startOfDay } from "../src/db/queries";
+import { activitySamples, addDays, dailyTotals, startOfDay } from "../src/db/queries";
+import { DEFAULT_STRIDE_CM } from "../src/metrics";
 import { ActivityKind } from "../src/server/schema";
 import { ServerComparisonSource, insertServerRows, participantsOf } from "../src/server/server-source";
 import { createLocalViews } from "../src/server/views";
@@ -51,6 +52,41 @@ describe("server views: the server's Gadgetbridge tables seen with the app's sch
     ]);
   });
 
+});
+
+describe("distance for steps with no measured distance", () => {
+  /** a day of cumulative rows: [minute of the day, steps counter, distance counter or -1] */
+  async function person(db: ReturnType<typeof serverDb>, name: string, day: number, rows: [number, number, number][]) {
+    const { pid, did } = await addParticipant(db, name);
+    await insertServerRows(db, pid, did, {
+      GARMIN_ACTIVITY_SAMPLE: rows.map(([m, steps, dist]) => ({ TIMESTAMP: day + m * 60, RAW_INTENSITY: 1, STEPS: steps, RAW_KIND: ActivityKind.ACTIVITY, HEART_RATE: 70, DISTANCE_CM: dist, ACTIVE_CALORIES: 0 })),
+    });
+    return pid;
+  }
+
+  it("estimates only steps that no later distance of the day covers: the person's step length, or 75 cm", async () => {
+    const db = serverDb();
+    const day = addDays(today, -2);
+    // A: 200 minutes of 10 steps with distance measured every 4 minutes (80 cm per step), then 100
+    // steps after the last measured distance
+    const a: [number, number, number][] = [];
+    for (let m = 1; m <= 200; m++) a.push([m, m * 10, m % 4 === 0 ? m * 10 * 80 : -1]);
+    a.push([201, 2100, -1]);
+    // B: steps, distance never measured
+    const b: [number, number, number][] = [[1, 50, -1], [2, 120, -1]];
+    const pa = await person(db, "a", day, a);
+    const pb = await person(db, "b", day, b);
+    await createLocalViews(db);
+    const [ta] = await dailyTotals(db, pa, day, addDays(day, 1));
+    // minutes without distance before a measured one are covered by its delta: no estimate there
+    expect(ta.distance_m).toBeCloseTo((2000 * 80 + 100 * 80) / 100, 6);
+    expect(ta.distance_estimated_m).toBeCloseTo(80, 6);
+    const [tb] = await dailyTotals(db, pb, day, addDays(day, 1));
+    expect(tb.distance_m).toBeCloseTo((120 * DEFAULT_STRIDE_CM) / 100, 6); // too few minutes: 75 cm
+    expect(tb.distance_estimated_m).toBe(tb.distance_m);
+    const samples = await activitySamples(db, pa, day, addDays(day, 1));
+    expect(samples.reduce((s, r) => s + r.distance_est_cm, 0)).toBe(8000);
+  });
 });
 
 describe("comparison on the server's participants", () => {

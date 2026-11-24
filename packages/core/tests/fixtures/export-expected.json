@@ -1,0 +1,111 @@
+{
+  "source": "legacy-bluetooth: importer + loadDay, 30 file FIT di FF:6E:25:19:33:7F",
+  "days": {
+    "2026-11-03": {
+      "steps": 377,
+      "distanceM": 305.37,
+      "activeCalories": 51,
+      "restingHr": 66,
+      "stressByLevel": {
+        "rest": 236,
+        "low": 36,
+        "medium": 17,
+        "high": 3
+      },
+      "energyCharged": 12,
+      "energyDrained": 16,
+      "sleep": null,
+      "sleepMinutes": 0
+    },
+    "2026-11-04": {
+      "steps": 2594,
+      "distanceM": 2101.02,
+      "activeCalories": 275,
+      "restingHr": 65,
+      "stressByLevel": {
+        "rest": 446,
+        "low": 238,
+        "medium": 357,
+        "high": 140
+      },
+      "energyCharged": 65,
+      "energyDrained": 85,
+      "sleep": {
+        "start": 1793754720,
+        "end": 1793781531,
+        "minutes": {
+          "awake": 9,
+          "light": 302,
+          "deep": 63,
+          "rem": 72.85
+        },
+        "score": 86
+      },
+      "sleepMinutes": 437.85
+    },
+    "2026-11-05": {
+      "steps": 4450,
+      "distanceM": 3652.42,
+      "activeCalories": 541,
+      "restingHr": 54,
+      "stressByLevel": {
+        "rest": 363,
+        "low": 338,
+        "medium": 210,
+        "high": 202
+      },
+      "energyCharged": 73,
+      "energyDrained": 83,
+      "sleep": {
+        "start": 1793842440,
+        "end": 1793861580,
+        "minutes": {
+          "awake": 7,
+          "light": 213,
+          "deep": 76,
+          "rem": 23
+        },
+        "score": 65
+      },
+      "sleepMinutes": 312
+    },
+    "2026-11-06": {
+      "steps": 704,
+      "distanceM": 570.22,
+      "activeCalories": 154,
+      "restingHr": 54,
+      "stressByLevel": {
+        "rest": 429,
+        "low": 36,
+        "medium": 75,
+        "high": 124
+      },
+      "energyCharged": 73,
+      "energyDrained": 21,
+      "sleep": {
+        "start": 1793927280,
+        "end": 1793956200,
+        "minutes": {
+          "awake": 10,
+          "light": 278,
+          "deep": 77,
+          "rem": 117
+        },
+        "score": 95
+      },
+      "sleepMinutes": 472
+    }
+  },
+  "known": {
+    "note": "passi mostrati da Gadgetbridge per gli stessi giorni (il 6/11 fino alle 12:25 circa)",
+    "steps": {
+      "2026-11-04": 2594,
+      "2026-11-05": 4450,
+      "2026-11-06": 704
+    }
+  },
+  "complete": [
+    "2026-11-04",
+    "2026-11-05"
+  ]
+}

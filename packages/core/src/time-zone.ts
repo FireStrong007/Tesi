@@ -24,8 +24,19 @@ export function zoneOffset(timeZone: string, ts: number): number {
   return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) / 1000 - Math.floor(ts);
 }
 
-/** The zone's offset changes between two years: [from, offset] with the offset valid from that moment. */
+const transitions = new Map<string, [number, number][]>();
+/**
+ * The zone's offset changes between two years: [from, offset] with the offset valid from that
+ * moment. Computed once per zone and range (about 11 000 Intl calls for 30 years), then reused.
+ */
 export function zoneTransitions(timeZone: string, fromYear = 2015, toYear = 2045): [number, number][] {
+  const key = `${timeZone}:${fromYear}:${toYear}`;
+  let t = transitions.get(key);
+  if (!t) transitions.set(key, (t = computeTransitions(timeZone, fromYear, toYear)));
+  return t.map(([a, b]) => [a, b]);
+}
+
+function computeTransitions(timeZone: string, fromYear: number, toYear: number): [number, number][] {
   const start = Date.UTC(fromYear, 0, 1) / 1000;
   const end = Date.UTC(toYear, 0, 1) / 1000;
   const out: [number, number][] = [[start, zoneOffset(timeZone, start)]];

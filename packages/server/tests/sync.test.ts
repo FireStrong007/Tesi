@@ -191,7 +191,7 @@ describe("the browser's copy of a participant's data", () => {
     await syncCopy(fresh, api);
     await updateAppTables(fresh, "vitabridge", { from: null });
     for (const v of LOCAL_VIEWS) {
-      const all = (db: SqlExecutor) => db.all(`SELECT * FROM main.${v.name} ORDER BY 1, 2, 3, 4`);
+      const all = async (db: SqlExecutor) => (await db.all(`SELECT * FROM main.${v.name}`)).map((r) => JSON.stringify(r)).sort();
       expect(await all(local), v.name).toEqual(await all(fresh));
     }
     const late = await local.all<{ s: number }>("SELECT steps AS s FROM activity_sample WHERE device_id = ? AND timestamp = ?", [band.d, band.m - 86_400 + 30 - 60]);
