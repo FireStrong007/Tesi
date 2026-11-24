@@ -36,7 +36,7 @@ const COUNTERS = [
 // differs per column). SQLite's LAG cannot skip -1 rows, hence: g = running count of measured
 // values (each measured row starts a group), v = the measured value of the row's group, and the
 // previous measured value of a measured row is v of the row just before it (group g - 1).
-const ACTIVITY_VIEW: LocalView = { name: "activity_sample", select: `
+const ACTIVITY_VIEW: LocalView = { name: "activity_sample", select: (from) => `
 SELECT DEVICE_ID AS device_id, USER_ID AS user_id, TIMESTAMP - 60 AS timestamp,
   NULL AS activity_type,
   NULLIF(RAW_INTENSITY, ${NOT_MEASURED}) AS intensity,
@@ -51,7 +51,7 @@ FROM (
       FROM (
         SELECT USER_ID, DEVICE_ID, TIMESTAMP, RAW_INTENSITY, HEART_RATE, STEPS, DISTANCE_CM, ACTIVE_CALORIES,
           date(TIMESTAMP - 60 + (SELECT o FROM tz_offset WHERE t <= TIMESTAMP - 60 ORDER BY t DESC LIMIT 1), 'unixepoch') AS day
-        FROM GARMIN_ACTIVITY_SAMPLE WHERE RAW_KIND <> ${ActivityKind.NOT_WORN}
+        FROM GARMIN_ACTIVITY_SAMPLE WHERE RAW_KIND <> ${ActivityKind.NOT_WORN}${from == null ? "" : ` AND TIMESTAMP - 60 >= ${from}`}
       )
       WINDOW w AS (PARTITION BY USER_ID, DEVICE_ID, day ORDER BY TIMESTAMP ROWS UNBOUNDED PRECEDING)
     )
@@ -62,20 +62,29 @@ FROM (
 /** A millisecond table shown as a seconds one: `cols` maps our column to the server expression. */
 const msView = (name: string, table: string, cols: Record<string, string>, where = ""): LocalView => ({
   name,
-  select: `SELECT DEVICE_ID AS device_id, USER_ID AS user_id, TIMESTAMP / 1000 AS timestamp,
+  select: (from) => {
+    const conds = [where, from == null ? "" : `TIMESTAMP >= ${from * 1000}`].filter(Boolean);
+    return `SELECT DEVICE_ID AS device_id, USER_ID AS user_id, TIMESTAMP / 1000 AS timestamp,
   ${Object.entries(cols).map(([ours, theirs]) => `${theirs} AS ${ours}`).join(", ")}
-FROM ${table}${where ? ` WHERE ${where}` : ""}`,
+FROM ${table}${conds.length ? ` WHERE ${conds.join(" AND ")}` : ""}`;
+  },
 });
 
 /** A view with the app's columns and no rows (data the server format does not have). */
-const emptyView = (name: string, cols: string[]): LocalView => ({ name, select: `SELECT ${cols.map((c) => `NULL AS ${c}`).join(", ")} WHERE 0` });
+const emptyView = (name: string, cols: string[]): LocalView => ({ name, select: () => `SELECT ${cols.map((c) => `NULL AS ${c}`).join(", ")} WHERE 0` });
 
 /** One of the app's tables, as a SELECT over the server's tables. */
 export interface LocalView {
   name: string;
-  select: string;
+  /**
+   * the SELECT; with `from` (a day start of the study's zone, unix seconds) only the rows from that
+   * day on, computed exactly as the full SELECT computes them (see updateLocalTables)
+   */
+  select: (from: number | null) => string;
   /** column the app's queries filter on besides user_id (for the index of a materialized copy) */
   time?: string;
+  /** column whose value ≥ from marks the rows a partial update replaces (default: timestamp) */
+  updatedBy?: string;
 }
 
 export const LOCAL_VIEWS: LocalView[] = [
@@ -113,13 +122,15 @@ export const LOCAL_VIEWS: LocalView[] = [
   {
     name: "sleep_session",
     time: "start",
-    select: `SELECT device_id, user_id, start, "end" FROM (
+    // a night belongs to the day it ends; nights ending from `from` on are recomputed
+    updatedBy: '"end"',
+    select: (from) => `SELECT device_id, user_id, start, "end" FROM (
      SELECT e.DEVICE_ID AS device_id, e.USER_ID AS user_id, e.TIMESTAMP / 1000 AS "end",
        (SELECT MAX(s.TIMESTAMP) / 1000 FROM GARMIN_EVENT_SAMPLE s
         WHERE s.USER_ID = e.USER_ID AND s.DEVICE_ID = e.DEVICE_ID AND s.EVENT = 74 AND s.EVENT_TYPE = 0
           AND s.TIMESTAMP < e.TIMESTAMP AND s.TIMESTAMP > e.TIMESTAMP - 86400000) AS start
      FROM GARMIN_EVENT_SAMPLE e WHERE e.EVENT = 74 AND e.EVENT_TYPE = 1
-   ) WHERE start IS NOT NULL`,
+   ) WHERE start IS NOT NULL${from == null ? "" : ` AND "end" >= ${from}`}`,
   },
   // not in the server format: the app's live minutes and restless moments
   emptyView("live_sample", ["device_id", "user_id", "timestamp", "heart_rate", "steps", "body_battery", "respiration", "spo2"]),
@@ -132,18 +143,51 @@ export const LOCAL_VIEWS: LocalView[] = [
  * index on (user_id, time), a snapshot to rebuild (call again) after new data is uploaded. Both
  * are idempotent and never write to the server's own tables.
  */
-export async function createLocalViews(db: SqlExecutor, opts: { materialize?: boolean; timeZone?: string } = {}) {
+/** the zone's UTC offsets for the views (TEMP: per connection, nothing written to the database) */
+async function createTzOffsets(db: SqlExecutor, timeZone: string) {
   await db.run("DROP TABLE IF EXISTS temp.tz_offset");
   await db.run("CREATE TEMP TABLE tz_offset (t INTEGER PRIMARY KEY, o INTEGER NOT NULL) WITHOUT ROWID");
-  await db.batch(zoneTransitions(opts.timeZone ?? STUDY_TIME_ZONE).map(([t, o]) => ({ sql: "INSERT INTO temp.tz_offset VALUES (?, ?)", params: [t, o] })));
+  await db.batch(zoneTransitions(timeZone).map(([t, o]) => ({ sql: "INSERT INTO temp.tz_offset VALUES (?, ?)", params: [t, o] })));
+}
+
+export async function createLocalViews(db: SqlExecutor, opts: { materialize?: boolean; timeZone?: string } = {}) {
+  await createTzOffsets(db, opts.timeZone ?? STUDY_TIME_ZONE);
   const existing = await db.all<{ name: string; type: string }>("SELECT name, type FROM sqlite_temp_master WHERE type IN ('view', 'table') AND name <> 'tz_offset'");
   for (const v of LOCAL_VIEWS) {
     const old = existing.find((e) => e.name === v.name);
     if (old) await db.run(`DROP ${old.type === "view" ? "VIEW" : "TABLE"} temp.${v.name}`);
-    if (!opts.materialize) await db.run(`CREATE TEMP VIEW ${v.name} AS ${v.select}`);
+    if (!opts.materialize) await db.run(`CREATE TEMP VIEW ${v.name} AS ${v.select(null)}`);
     else {
-      await db.run(`CREATE TEMP TABLE ${v.name} AS ${v.select}`);
+      await db.run(`CREATE TEMP TABLE ${v.name} AS ${v.select(null)}`);
       await db.run(`CREATE INDEX temp.${v.name}_user_time ON ${v.name} (user_id, ${v.time ?? "timestamp"})`);
     }
   }
+}
+
+/**
+ * The app's tables as ordinary (persistent) tables of the database: for the browser's copy, which
+ * keeps them between visits instead of rebuilding them at every start. With `from` (a day start of
+ * the study's zone) only the rows from that day on are replaced, in one transaction per table: the
+ * views compute whole days (the day counters restart at local midnight), so the result is the same
+ * as a full rebuild. Without `from`, or when a table is missing, everything is rebuilt.
+ * Never on a research server database (it only ever gets TEMP views or tables).
+ */
+export async function updateLocalTables(db: SqlExecutor, opts: { from: number | null; timeZone?: string }): Promise<"full" | "partial"> {
+  await createTzOffsets(db, opts.timeZone ?? STUDY_TIME_ZONE);
+  const existing = new Set((await db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'")).map((r) => r.name));
+  const full = opts.from == null || LOCAL_VIEWS.some((v) => !existing.has(v.name));
+  for (const v of LOCAL_VIEWS) {
+    if (full)
+      await db.batch([
+        { sql: `DROP TABLE IF EXISTS main.${v.name}` },
+        { sql: `CREATE TABLE main.${v.name} AS ${v.select(null)}` },
+        { sql: `CREATE INDEX main.${v.name}_user_time ON ${v.name} (user_id, ${v.time ?? "timestamp"})` },
+      ]);
+    else
+      await db.batch([
+        { sql: `DELETE FROM main.${v.name} WHERE ${v.updatedBy ?? "timestamp"} >= ?`, params: [opts.from] },
+        { sql: `INSERT INTO main.${v.name} SELECT * FROM (${v.select(opts.from)})` },
+      ]);
+  }
+  return full ? "full" : "partial";
 }

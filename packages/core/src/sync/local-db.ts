@@ -60,3 +60,20 @@ export async function prepareLocalDb(db: SqlExecutor, app: AppId, owner: string)
   await setMeta(db, "schema_version", String(LOCAL_SCHEMA_VERSION));
   return true;
 }
+
+/**
+ * The app's tables (built from the copy by the adapter) are out of date from `from` (unix seconds)
+ * on, or entirely ("all"). Written by the sync BEFORE it changes the copy, cleared once the tables
+ * are updated: an interrupted sync or a closed page leaves the mark, and the next start finishes
+ * the job.
+ */
+export async function markDirty(db: SqlExecutor, from: number | "all") {
+  const cur = await getMeta(db, "dirty_from");
+  const next = cur === "all" || from === "all" ? "all" : String(Math.min(cur == null ? Infinity : Number(cur), from));
+  if (next !== cur) await setMeta(db, "dirty_from", next);
+}
+export async function dirtyFrom(db: SqlExecutor): Promise<number | "all" | null> {
+  const v = await getMeta(db, "dirty_from");
+  return v == null ? null : v === "all" ? "all" : Number(v);
+}
+export const clearDirty = (db: SqlExecutor) => db.run("DELETE FROM meta WHERE key = 'dirty_from'");

@@ -12,7 +12,7 @@
  * If the server's data copy changes during the sync (dataVersion), the whole sync runs once more.
  */
 import type { SqlExecutor, SqlParam, Statement } from "../db/sql";
-import { DEVICE_COLUMNS, setMeta } from "./local-db";
+import { DEVICE_COLUMNS, markDirty, setMeta } from "./local-db";
 
 export const WINDOW_DAYS = 3;
 export const PAGE_SIZE = 5000;
@@ -73,6 +73,7 @@ export interface SyncReport {
 
 const q = (id: string) => `"${id.replace(/"/g, '""')}"`;
 const windowOf = (unit: "s" | "ms") => WINDOW_DAYS * 86_400 * (unit === "ms" ? 1000 : 1);
+const toSeconds = (t: number, unit: "s" | "ms") => (unit === "ms" ? Math.floor(t / 1000) : t);
 
 const B64 = new Uint8Array(128);
 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".split("").forEach((c, i) => (B64[c.charCodeAt(0)] = i));
@@ -115,10 +116,14 @@ async function syncOnce(db: SqlExecutor, api: SyncApi, opts: { onProgress?: (p: 
   const tasks: Task[] = [];
   let expected = 0;
   for (const t of tables) {
-    const local = await db.all<{ device: number; n: number; maxTime: number | null }>(`SELECT DEVICE_ID AS device, count(*) AS n, max(${q(t.time)}) AS maxTime FROM ${q(t.name)} GROUP BY DEVICE_ID`);
+    const local = await db.all<{ device: number; n: number; minTime: number | null; maxTime: number | null }>(
+      `SELECT DEVICE_ID AS device, count(*) AS n, min(${q(t.time)}) AS minTime, max(${q(t.time)}) AS maxTime FROM ${q(t.name)} GROUP BY DEVICE_ID`,
+    );
     const remote = server.counts[t.name] ?? [];
     for (const l of local)
       if (!remote.some((r) => r.device === l.device)) {
+        // the app's tables change from that device's first day on
+        await markDirty(db, l.minTime == null ? "all" : toSeconds(l.minTime, t.unit));
         await db.run(`DELETE FROM ${q(t.name)} WHERE DEVICE_ID = ?`, [l.device]);
         report.removed.push(`${t.name}:${l.device}`);
       }
@@ -130,6 +135,9 @@ async function syncOnce(db: SqlExecutor, api: SyncApi, opts: { onProgress?: (p: 
       if (since == null) expected += r.count;
     }
   }
+
+  // before touching the copy: from where the app's tables will be out of date
+  for (const task of tasks) await markDirty(db, task.since == null ? "all" : toSeconds(task.since, task.t.unit));
 
   const progress = (table: string) => opts.onProgress?.({ rows: report.rows, expected: Math.max(expected, report.rows), table });
 
@@ -170,6 +178,7 @@ async function syncOnce(db: SqlExecutor, api: SyncApi, opts: { onProgress?: (p: 
     if (n !== task.server.count) {
       // rows outside the window changed on the server: this device's table again, in full
       report.recounted.push(`${t.name}:${device}`);
+      await markDirty(db, "all");
       await download(t, device, null);
     }
   }

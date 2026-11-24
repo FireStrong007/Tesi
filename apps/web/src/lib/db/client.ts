@@ -1,12 +1,11 @@
 import type { InitInfo, WorkerRequest } from "./db.worker";
-import type { SchemaRepair } from "./migrate";
 import type { Row, SqlExecutor, SqlParam, Statement } from "@bridge/core/db/sql";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 // Distributive Omit so each union member keeps its own fields
 type RequestBody = WorkerRequest extends infer R ? (R extends { id: number } ? Omit<R, "id"> : never) : never;
 
-/** Promise-based client for the SQLite worker. */
+/** Promise-based client for the SQLite worker (the browser's copy of the participant's data). */
 export class DbClient implements SqlExecutor {
   private worker: Worker;
   private seq = 0;
@@ -24,11 +23,11 @@ export class DbClient implements SqlExecutor {
     };
   }
 
-  private call<T>(req: RequestBody, transfer: Transferable[] = []): Promise<T> {
+  private call<T>(req: RequestBody): Promise<T> {
     const id = ++this.seq;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.worker.postMessage({ ...req, id }, transfer);
+      this.worker.postMessage({ ...req, id });
     });
   }
 
@@ -49,26 +48,26 @@ export class DbClient implements SqlExecutor {
     return this.call<void>({ op: "batch", statements });
   }
 
-  /** A separate in-memory database in the same worker (lost on reload), for derived computations. */
-  scratch(): SqlExecutor {
-    return {
-      all: <T = Row>(sql: string, params?: SqlParam[]) => this.call<T[]>({ op: "all", sql, params, scratch: true }),
-      run: (sql: string, params?: SqlParam[]) => this.call<{ changes: number; lastInsertRowid: number }>({ op: "run", sql, params, scratch: true }),
-      batch: (statements: Statement[]) => this.call<void>({ op: "batch", statements, scratch: true }),
-    };
+  bulk(sql: string, rows: SqlParam[][], before?: Statement[]): Promise<void> {
+    return this.call<void>({ op: "bulk", sql, rows, before });
   }
 
-  exportDb(): Promise<Uint8Array> {
-    return this.call<Uint8Array>({ op: "export" });
+  /** an empty copy (another person logged in) */
+  async wipe(): Promise<void> {
+    this.info = await this.call<InitInfo>({ op: "wipe" });
   }
 
-  /** Replaces the database; returns what the schema check had to repair in the imported file. */
-  importDb(bytes: Uint8Array): Promise<SchemaRepair[]> {
-    const copy = bytes.slice();
-    return this.call<SchemaRepair[]>({ op: "import", bytes: copy }, [copy.buffer]);
+  /** logout: the copy and its OPFS directory are removed, the worker stops */
+  async erase(): Promise<void> {
+    try {
+      await this.call<void>({ op: "erase" });
+    } finally {
+      this.worker.terminate();
+    }
   }
 
-  wipe(): Promise<void> {
-    return this.call<void>({ op: "wipe" });
+  /** stops the worker without touching the copy */
+  close() {
+    this.worker.terminate();
   }
 }

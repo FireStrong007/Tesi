@@ -9,11 +9,12 @@ import { copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createAppTables } from "@bridge/core/adapters";
+import { createAppTables, updateAppTables } from "@bridge/core/adapters";
 import { DATASETS } from "@bridge/core/datasets";
 import { oo1Executor, type Oo1Db, type SqlExecutor } from "@bridge/core/db/sql";
 import { loadRange } from "@bridge/core/range-data";
-import { ownerOf, prepareLocalDb } from "@bridge/core/sync/local-db";
+import { clearDirty, dirtyFrom, ownerOf, prepareLocalDb } from "@bridge/core/sync/local-db";
+import { LOCAL_VIEWS } from "@bridge/core/server/views";
 import { WINDOW_DAYS, syncCopy, type SyncApi } from "@bridge/core/sync/sync";
 import { addDays, startOfDay } from "@bridge/core/time-zone";
 import type { DataSource } from "../src/data-source";
@@ -159,6 +160,42 @@ describe("the browser's copy of a participant's data", () => {
     const again = await syncCopy(local, api);
     expect(again.recounted).toEqual([]);
     expect(again.full).toEqual([]);
+  });
+
+  it("after a sync only the touched days of the app's tables are rebuilt, with the same result as a full rebuild", async () => {
+    const local = localDb();
+    await prepareLocalDb(local, "vitabridge", ownerOf("vitabridge", "syn-g04"));
+    await syncCopy(local, api);
+    expect(await dirtyFrom(local)).toBe("all"); // first download: everything
+    expect(await updateAppTables(local, "vitabridge", { from: null })).toBe("full");
+    await clearDirty(local);
+
+    // the server changes in the last days: a late minute, a replaced stress value, a removed one
+    const band = server.db.prepare("SELECT DEVICE_ID AS d, max(TIMESTAMP) AS m FROM GARMIN_ACTIVITY_SAMPLE WHERE USER_ID = ? GROUP BY DEVICE_ID ORDER BY m DESC LIMIT 1").get(pid) as { d: number; m: number };
+    server.db
+      .prepare("INSERT OR REPLACE INTO GARMIN_ACTIVITY_SAMPLE (TIMESTAMP, DEVICE_ID, USER_ID, RAW_INTENSITY, STEPS, RAW_KIND, HEART_RATE, DISTANCE_CM, ACTIVE_CALORIES) VALUES (?, ?, ?, 1, 999999, 1, 99, 999999, 999)")
+      .run(band.m - 86_400 + 30, band.d, pid);
+    const st = server.db.prepare("SELECT TIMESTAMP AS t FROM GARMIN_STRESS_SAMPLE WHERE USER_ID = ? AND DEVICE_ID = ? ORDER BY TIMESTAMP DESC LIMIT 2").all(pid, band.d) as { t: number }[];
+    server.db.prepare("UPDATE GARMIN_STRESS_SAMPLE SET STRESS = 88 WHERE USER_ID = ? AND DEVICE_ID = ? AND TIMESTAMP = ?").run(pid, band.d, st[0].t);
+    server.db.prepare("DELETE FROM GARMIN_STRESS_SAMPLE WHERE USER_ID = ? AND DEVICE_ID = ? AND TIMESTAMP = ?").run(pid, band.d, st[1].t);
+    server.changed();
+
+    await syncCopy(local, api);
+    const dirty = await dirtyFrom(local);
+    expect(typeof dirty).toBe("number"); // only the windows of the last days
+    expect(await updateAppTables(local, "vitabridge", { from: startOfDay(dirty as number) })).toBe("partial");
+
+    // the reference: a fresh copy, tables rebuilt in full
+    const fresh = localDb();
+    await prepareLocalDb(fresh, "vitabridge", ownerOf("vitabridge", "syn-g04"));
+    await syncCopy(fresh, api);
+    await updateAppTables(fresh, "vitabridge", { from: null });
+    for (const v of LOCAL_VIEWS) {
+      const all = (db: SqlExecutor) => db.all(`SELECT * FROM main.${v.name} ORDER BY 1, 2, 3, 4`);
+      expect(await all(local), v.name).toEqual(await all(fresh));
+    }
+    const late = await local.all<{ s: number }>("SELECT steps AS s FROM activity_sample WHERE device_id = ? AND timestamp = ?", [band.d, band.m - 86_400 + 30 - 60]);
+    expect(late.length).toBe(1);
   });
 
   it("a copy belongs to one person: another login must wipe it first", async () => {

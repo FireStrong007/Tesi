@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { useSize } from "@/hooks/use-size";
 import { cn } from "@/lib/utils";
 import { fmt1, fmtDayMonth, fmtDuration, fmtInt, fmtTime } from "@bridge/core/format";
-import type { SleepSegment, TimeValue } from "@/lib/db/repo";
+import type { SleepSegment, TimeValue } from "@bridge/core/db/queries";
 import { nearestPoint, pointAtOrBefore, useChartInteraction, visibleSlice, type ChartInteraction, type TimeWindow } from "./interaction";
 
 import { STAGE_COLOR, STAGE_LABEL } from "@bridge/core/colors";

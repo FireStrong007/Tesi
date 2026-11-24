@@ -2,13 +2,22 @@
  * Reads a real Gadgetbridge export (the zip made by "Export database" / "Esporta dati") for the
  * tests that compare our conversion with what Gadgetbridge stored. The export holds personal health
  * data, so it is never part of the repository: its path comes from the GB_EXPORT environment
- * variable and the tests are skipped without it.
+ * variable (or data/, which git ignores) and the tests are skipped without it.
  */
 import { readFileSync } from "node:fs";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-import { listZip, readZipEntry, sourceFromBytes } from "../src/lib/zip";
-import { fileIdOf } from "../src/lib/gb-import";
 import type { Oo1Db } from "@bridge/core/db/sql";
+import { decodeFit, num } from "./fit/decoder";
+import { listZip, readZipEntry, sourceFromBytes } from "./zip";
+
+/** type and creation time of a FIT file (its file_id message) */
+export function fileIdOf(data: Uint8Array) {
+  const id = decodeFit(data).records.find((r) => r.name === "file_id");
+  if (!id) throw new Error("file FIT senza intestazione file_id");
+  const type = num(id.fields.type);
+  if (type === null) throw new Error("tipo di file FIT mancante");
+  return { type, created: num(id.fields.time_created) };
+}
 
 export const GB_EXPORT = process.env.GB_EXPORT ?? "";
 

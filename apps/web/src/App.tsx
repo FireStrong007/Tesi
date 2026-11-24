@@ -1,158 +1,124 @@
-import { useEffect, useRef, useState } from "react";
-import { Loader2Icon, PhoneIcon, TriangleAlertIcon } from "lucide-react";
-import { AppProvider, useApp } from "@/app-context";
+import { Loader2Icon, RefreshCwIcon, ShieldAlertIcon, TriangleAlertIcon } from "lucide-react";
+import { AppProvider, type StartState } from "@/app-context";
 import { AuthProvider, useAuth } from "@/auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Toaster, toast } from "@/components/ui/sonner";
+import { Progress } from "@/components/ui/progress";
+import { Toaster } from "@/components/ui/sonner";
 import { match, usePath } from "@/lib/router";
 import { AdminApp } from "@/pages/admin";
 import { ForcedPasswordChangePage } from "@/pages/change-password";
 import { ChartsPage } from "@/pages/charts";
 import { DashboardPage } from "@/pages/dashboard";
-import { DeviceSettingsPage } from "@/pages/device-settings";
 import { DevicesPage } from "@/pages/devices";
 import { LoginPage } from "@/pages/login";
-import { LogsPage } from "@/pages/logs";
 import { SettingsPage } from "@/pages/settings";
-import { WorkoutDetailPage, WorkoutsPage } from "@/pages/workouts";
 
 function Routes() {
   const path = usePath();
-  let p: Record<string, string> | null;
-  if ((p = match("/devices/:id/settings", path))) return <DeviceSettingsPage id={Number(p.id)} />;
   if (match("/devices", path)) return <DevicesPage />;
   if (match("/charts", path)) return <ChartsPage />;
-  if ((p = match("/workouts/:id", path))) return <WorkoutDetailPage id={Number(p.id)} />;
-  if (match("/workouts", path)) return <WorkoutsPage />;
   if (match("/settings", path)) return <SettingsPage />;
-  if (match("/logs", path)) return <LogsPage />;
   return <DashboardPage />;
 }
 
-/** "Find my phone" requested from the band: beep + vibrate until stopped (like Gadgetbridge). */
-function FindPhone() {
-  const { manager } = useApp();
-  const [open, setOpen] = useState(false);
-  const audio = useRef<{ ctx: AudioContext; timer: ReturnType<typeof setInterval> } | null>(null);
-  const stop = () => {
-    setOpen(false);
-    if (audio.current) {
-      clearInterval(audio.current.timer);
-      void audio.current.ctx.close();
-      audio.current = null;
-    }
-    navigator.vibrate?.(0);
-  };
-  useEffect(() => {
-    manager.onFindPhone = (start) => {
-      if (!start) return stop();
-      setOpen(true);
-      try {
-        const ctx = new AudioContext();
-        const beep = () => {
-          const o = ctx.createOscillator();
-          const g = ctx.createGain();
-          o.frequency.value = 880;
-          g.gain.value = 0.2;
-          o.connect(g).connect(ctx.destination);
-          o.start();
-          o.stop(ctx.currentTime + 0.35);
-          navigator.vibrate?.([300, 200, 300]);
-        };
-        beep();
-        audio.current = { ctx, timer: setInterval(beep, 1200) };
-      } catch {
-        /* audio not allowed without a user gesture */
-      }
-    };
-    return () => {
-      manager.onFindPhone = null;
-    };
-  }, [manager]);
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && stop()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <PhoneIcon className="size-5" /> Il bracciale sta cercando il telefono
-          </DialogTitle>
-          <DialogDescription>Hai trovato il telefono? Ferma il segnale.</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button onClick={stop}>Trovato</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** Explains the outcome of a manual sync. */
-function SyncResults() {
-  const { manager } = useApp();
-  useEffect(() => {
-    manager.onManualSyncDone = (_id, r) => {
-      if (r.failed) toast.error(`Sincronizzazione: ${r.downloaded} file scaricati, ${r.failed} con errori`, { description: "Dettagli nella pagina Log." });
-      else if (r.downloaded > 0) toast.success(`Sincronizzazione completata: ${r.downloaded} ${r.downloaded === 1 ? "file nuovo" : "file nuovi"}`);
-      else
-        toast("Nessun file nuovo sul bracciale", {
-          description:
-            r.listed === 0
-              ? "Il bracciale non ha elencato file: di solito succede poco dopo l'abbinamento, finché non salva i primi dati. Intanto la Home usa i dati in tempo reale."
-              : "I file già scaricati sono stati archiviati; quelli nuovi compaiono quando il bracciale li salva. Intanto la Home usa i dati in tempo reale.",
-        });
-    };
-    return () => {
-      manager.onManualSyncDone = null;
-    };
-  }, [manager]);
-  return null;
-}
-
-function Splash({ error }: { error: Error | null }) {
+function Centered({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center gap-4 p-6 text-center">
       <img src="icon.svg" alt="" className="size-14" />
-      {error ? (
-        <>
-          <TriangleAlertIcon className="text-destructive size-6" />
-          <div className="font-semibold">Impossibile aprire il database</div>
-          <div className="text-muted-foreground max-w-sm text-sm">{error.message}</div>
-        </>
-      ) : (
-        <Loader2Icon className="text-muted-foreground size-6 animate-spin" />
-      )}
+      {children}
     </div>
   );
 }
 
-/** The participant's app (until Fase 3 still the local one, with the band and the demo). */
+/** Before the data: opening the copy, the first download, or why it could not start. */
+function StartScreen({ error, progress, syncError, retry }: StartState) {
+  const { logout } = useAuth();
+  if (error)
+    return (
+      <Centered>
+        <TriangleAlertIcon className="text-destructive size-6" />
+        <div className="font-semibold">Impossibile aprire i dati sul dispositivo</div>
+        <div className="text-muted-foreground max-w-sm text-sm">{error.message}</div>
+      </Centered>
+    );
+  if (syncError)
+    return (
+      <Centered>
+        <TriangleAlertIcon className="text-destructive size-6" />
+        <div className="font-semibold">Non è stato possibile scaricare i tuoi dati</div>
+        <div className="text-muted-foreground max-w-sm text-sm">{syncError}</div>
+        <div className="flex gap-2">
+          <Button onClick={retry}>
+            <RefreshCwIcon /> Riprova
+          </Button>
+          <Button variant="ghost" onClick={() => void logout()}>
+            Esci
+          </Button>
+        </div>
+      </Centered>
+    );
+  const pct = progress && progress.expected ? Math.round((progress.rows / progress.expected) * 100) : null;
+  return (
+    <Centered>
+      <Loader2Icon className="text-muted-foreground size-6 animate-spin" />
+      <div className="font-semibold">{progress ? "Scaricamento dei tuoi dati…" : "Apertura…"}</div>
+      {progress && (
+        <div className="w-64 space-y-2">
+          <Progress value={pct ?? 0} />
+          <div className="text-muted-foreground text-xs tabular-nums">{pct != null ? `${pct}%` : `${progress.rows} righe`}</div>
+        </div>
+      )}
+    </Centered>
+  );
+}
+
+/** The participant's app: their data, read from the server and kept on the device. */
 function ParticipantApp() {
   return (
-    <AppProvider fallback={(e) => <Splash error={e} />}>
+    <AppProvider fallback={(s) => <StartScreen {...s} />}>
       <AppShell>
         <Routes />
       </AppShell>
-      <FindPhone />
-      <SyncResults />
     </AppProvider>
+  );
+}
+
+/**
+ * The app needs a secure context (https, or localhost while developing): OPFS, the service worker
+ * and the session cookie depend on it. Opened over http from a network address, say so clearly.
+ */
+function InsecureContext() {
+  return (
+    <Centered>
+      <ShieldAlertIcon className="text-destructive size-6" />
+      <div className="font-semibold">Apri l'app con un indirizzo https</div>
+      <div className="text-muted-foreground max-w-md text-sm">
+        Questa pagina è aperta da <span className="font-mono">{location.origin}</span>, senza connessione sicura: il browser non permette di salvare i dati sul
+        dispositivo né di mantenere l'accesso. Usa l'indirizzo https che ti ha dato il responsabile dello studio
+        {location.hostname !== "localhost" && " (in sviluppo: http://localhost)"}.
+      </div>
+    </Centered>
   );
 }
 
 /** Login first; then the screen of the account's role. */
 function Gate() {
   const { state, reload } = useAuth();
-  if (state.status === "loading") return <Splash error={null} />;
+  if (state.status === "loading")
+    return (
+      <Centered>
+        <Loader2Icon className="text-muted-foreground size-6 animate-spin" />
+      </Centered>
+    );
   if (state.status === "offline")
     return (
-      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 p-6 text-center">
-        <img src="icon.svg" alt="" className="size-14" />
+      <Centered>
         <TriangleAlertIcon className="text-destructive size-6" />
         <div className="font-semibold">Il server non risponde</div>
         <div className="text-muted-foreground max-w-sm text-sm">{state.message}</div>
         <Button onClick={() => void reload()}>Riprova</Button>
-      </div>
+      </Centered>
     );
   if (state.status === "anonymous") return <LoginPage expired={state.reason === "expired"} />;
   if (state.me.account.mustChangePassword) return <ForcedPasswordChangePage />;
@@ -160,6 +126,7 @@ function Gate() {
 }
 
 export default function App() {
+  if (!window.isSecureContext) return <InsecureContext />;
   return (
     <AuthProvider>
       <Gate />

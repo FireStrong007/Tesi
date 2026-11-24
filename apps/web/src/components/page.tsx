@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { ArrowLeftIcon, CalendarDaysIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { addDays, startOfDay } from "@/lib/db/repo";
+import { addDays, startOfDay } from "@bridge/core/db/queries";
 import { fmtDay, fmtDayLong, fmtMonth } from "@bridge/core/format";
 import { cn } from "@/lib/utils";
 import { dayKey, fromDayKey, monthStart, weekStart } from "@bridge/core/time-zone";

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "VitaBridge e HeartBridge: web app che mostrano ai partecipanti di uno studio i dati dei loro bracciali, letti in sola lettura dai server dello studio.",
+  "description": "VitaBridge e HeartBridge: web app che mostrano ai partecipanti di uno studio i dati dei loro dispositivi, letti in sola lettura dal server dello studio.",
   "license": "AGPL-3.0-or-later",
   "workspaces": [
     "packages/*",

@@ -1,4 +1,3 @@
-/// <reference types="vitest/config" />
 import path from "node:path";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -15,6 +14,4 @@ export default defineConfig({
   // the API is our Node server (packages/server): same origin in development too, so cookies work without CORS
   server: { host: true, proxy: { "/api": { target: `http://127.0.0.1:${process.env.API_PORT ?? 8787}` } } },
   preview: { proxy: { "/api": { target: `http://127.0.0.1:${process.env.API_PORT ?? 8787}` } } },
-  // the study's time zone (src/lib/time-zone.ts): the same days locally and in CI
-  test: { name: "web", environment: "node", include: ["tests/**/*.test.ts"], env: { TZ: "Europe/Rome" } },
 });

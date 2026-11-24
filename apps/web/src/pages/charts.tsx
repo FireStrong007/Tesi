@@ -19,7 +19,8 @@ import {
   WindIcon,
   ZapIcon,
 } from "lucide-react";
-import { useApp } from "@/app-context";
+import { useApp, type Person } from "@/app-context";
+import { NEVER_RECORDED, NEVER_RECORDED_HINT, NOTHING_IN_PERIOD } from "@/lib/empty-states";
 import {
   ActivitySleepChart,
   ArcGauge,
@@ -46,6 +47,7 @@ import { useQuery } from "@/hooks/use-query";
 import {
   MIN_USERS,
   WEEKLY_METRICS,
+  COMPARE_AVAILABLE,
   getComparisonSource,
   periodValue,
   summarySentence,
@@ -57,11 +59,10 @@ import {
   type PeriodStanding,
 } from "@/lib/comparison";
 import { loadDay, type DayData } from "@bridge/core/day-data";
-import { addDays, sleepTotal, startOfDay, type User } from "@/lib/db/repo";
+import { addDays, sleepTotal, startOfDay } from "@bridge/core/db/queries";
 import { fmtDay, fmtDayLong, fmtDayMonth, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
-import { STRESS_LEVELS, STRESS_MIN_VALID, estimateBmr, getValidDayHours, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@bridge/core/metrics";
+import { STRESS_LEVELS, STRESS_MIN_VALID, getValidDayHours, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@bridge/core/metrics";
 import { loadRange, type DayAgg, type RangeData } from "@bridge/core/range-data";
-import { userServerRange } from "@/lib/server/user-mirror";
 import { navigate, query, usePath } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { stressLabel } from "./dashboard";
@@ -86,6 +87,7 @@ type SleepMinutes = { deep: number; light: number; rem: number; awake: number };
 const PERIOD_LABEL: Record<Period, string> = { day: "Giorno", week: "Settimana", month: "Mese" };
 
 export function ChartsPage() {
+  const { available } = useApp();
   const path = usePath();
   const q = query(path);
   const tab: MetricId = METRICS.some((m) => m.id === q.get("tab")) ? q.get("tab")! : "activity";
@@ -151,7 +153,15 @@ export function ChartsPage() {
             <DateNav day={day} onChange={(d) => set({ day: d })} period={period} />
           </div>
         </div>
-        {period === "day" ? <DayView tab={tab} day={day} /> : <RangeView tab={tab} day={day} period={period} onOpenDay={openDay} compare={compare} onCompare={(on) => setCompareOn(on ? compareKey : null)} />}
+        {!available[tab] ? (
+          <EmptyState icon={<metric.icon />} title={NEVER_RECORDED[tab] ?? "Nessun dato"}>
+            {NEVER_RECORDED_HINT}
+          </EmptyState>
+        ) : period === "day" ? (
+          <DayView tab={tab} day={day} />
+        ) : (
+          <RangeView tab={tab} day={day} period={period} onOpenDay={openDay} compare={compare} onCompare={(on) => setCompareOn(on ? compareKey : null)} />
+        )}
       </PageBody>
     </>
   );
@@ -251,7 +261,7 @@ const Center = ({ value, label, sub }: { value: ReactNode; label?: ReactNode; su
 
 const NoData = ({ children, action }: { children?: ReactNode; action?: ReactNode }) => (
   <EmptyState icon={<BarChart3Icon />} title="Nessun dato" action={action}>
-    {children ?? "Non ci sono dati per questo periodo. Sincronizza il bracciale, importa da Gadgetbridge oppure scegli un altro giorno."}
+    {children ?? NOTHING_IN_PERIOD}
   </EmptyState>
 );
 
@@ -271,10 +281,9 @@ const stageMinutes = (m: { deep: number; light: number; rem: number; awake: numb
 
 const sleepBand = (d: DayData) => (d.sleep ? [{ start: d.sleep.start, end: d.sleep.end, color: "color-mix(in oklch, var(--sleep-light) 12%, transparent)" }] : []);
 
-function bmrOf(rmr: number | null, user: User) {
-  if (rmr) return { value: rmr, estimated: false };
-  const e = estimateBmr(user);
-  return { value: e, estimated: e !== null };
+/** the resting metabolic rate the band measured (Garmin RMR): no estimate from a profile */
+function bmrOf(rmr: number | null) {
+  return { value: rmr, estimated: false };
 }
 
 // ------------------------------------------------------------------ day
@@ -372,7 +381,7 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
     }
 
     case "calories": {
-      const bmr = bmrOf(d.rmr, user);
+      const bmr = bmrOf(d.rmr);
       const resting = restingCalories(bmr.value, d.from, d.to);
       const goal = user.calories_goal;
       return (
@@ -692,32 +701,27 @@ function RangeView({
   const base = useMemo(() => (r ? buildRange(tab, r, user, labelOf, { period }) : null), [r, tab, user, period]); // eslint-disable-line react-hooks/exhaustive-deps
   // comparison with the other users: only where configured, SpO2/HRV only when the user has data
   const cfg = COMPARE_PERIODS.includes(period) ? COMPARE[tab] : undefined;
-  const canCompare = !!cfg && !!base && (!cfg.onlyWithData || base.hasData);
+  const canCompare = COMPARE_AVAILABLE && !!cfg && !!base && (!cfg.onlyWithData || base.hasData);
   const active = compare && canCompare;
-  const source = getComparisonSource();
-  // the demo profile asks too, but its values are never counted nor stored (see ComparisonQuery)
-  const query = { excludeUserId: String(user.id), isDemo: !!user.is_demo };
+  const source = active ? getComparisonSource() : null;
+  const query = { excludeUserId: String(user.id) };
   const { data: dist } = useQuery<DailyDistribution[] | null>(
     () =>
-      active && cfg
+      active && cfg && source
         ? WEEKLY_METRICS.has(cfg.metric)
           ? source.weeklyDistribution(cfg.metric, from, to, query)
           : source.dailyDistribution(cfg.metric, from, to, query)
         : Promise.resolve(null),
     [active, cfg?.metric, from, to, user.id],
   );
-  // the user's values for the comparison come from their FIT files in the server's format, read
-  // like every other participant's: "Tu" and the others share the same rules and limits (the bars
-  // keep the app's own values)
-  const { data: mineRange } = useQuery(
-    () => (active ? userServerRange(db, db.scratch(), user.id, from, to) : Promise.resolve(null)),
-    [active, from, to, user.id],
-  );
+  // the copy is the server's own format: "Tu" and the others are computed from the same tables
+  // with the same rules
+  const mineRange = active ? r : null;
   const now = Math.floor(Date.now() / 1000);
   const mineDaily = useMemo(() => (mineRange && cfg ? userDailyValues(cfg.metric, mineRange) : null), [mineRange, cfg]);
   const minePeriod = mineDaily && cfg && mineRange ? periodValue(cfg.metric, mineRange.days, mineDaily, now) : null;
   const { data: standing } = useQuery<PeriodStanding | null>(
-    () => (active && cfg && minePeriod ? source.periodStanding(cfg.metric, from, to, minePeriod.value, query) : Promise.resolve(null)),
+    () => (active && cfg && minePeriod && source ? source.periodStanding(cfg.metric, from, to, minePeriod.value, query) : Promise.resolve(null)),
     [active, cfg?.metric, from, to, user.id, minePeriod?.value],
   );
   // comparing adds the overlay, and the details go to a panel under the chart instead of the
@@ -785,14 +789,14 @@ function RangeView({
           yMax={yMax}
           overlay={cmp?.overlay}
           {...common}
-          {...(active && { info, infoDefault: lastWithData })}
+          {...(active ? { info, infoDefault: lastWithData } : {})}
         />
         {view.legend && <Legend items={view.legend} />}
         {cmp && (
           <div className="space-y-1.5 border-t pt-3">
             <Legend items={[cmp.legend]} />
             <p className="text-sm">{cmp.summary}</p>
-            {source.sample && <p className="text-muted-foreground text-[11px]">dati di confronto di esempio</p>}
+            {source?.sample && <p className="text-muted-foreground text-[11px]">dati di confronto di esempio</p>}
           </div>
         )}
       </ChartCard>
@@ -985,7 +989,7 @@ const hFmt = (v: number) => {
 const hourAxis = (maxMin: number, stepMin: number) => Math.max(stepMin, Math.ceil((maxMin * 1.05) / stepMin) * stepMin);
 const avgOf = (vals: number[]) => (vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null);
 
-function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number) => string, opts: { period: Period; compare?: boolean }): RangeViewSpec {
+function buildRange(tab: MetricId, r: RangeData, user: Person, labelOf: (d: number) => string, opts: { period: Period; compare?: boolean }): RangeViewSpec {
   const n = r.days.length;
   // days up to today: a month still in progress counts its goals over the days so far
   const elapsed = r.days.filter((d) => d <= startOfDay(Date.now() / 1000)).length;
@@ -1038,7 +1042,7 @@ function buildRange(tab: MetricId, r: RangeData, user: User, labelOf: (d: number
       const withData = r.totals.filter((t, i) => r.valid[i] || (r.days[i] >= startOfDay(Date.now() / 1000) && (t.calories > 0 || t.steps > 0)));
       const validDays = r.totals.filter((_, i) => r.valid[i]);
       const now = Date.now() / 1000;
-      const bmrs = r.rmr.map((v) => v ?? estimateBmr(user));
+      const bmrs = r.rmr;
       const restTot = r.days.reduce((s, d, i) => s + (withData.some((t) => t.day === d) ? restingCalories(bmrs[i], d, addDaysLocal(d, 1), now) : 0), 0);
       const lastBmr = [...bmrs].reverse().find((v) => v) ?? null;
       return {

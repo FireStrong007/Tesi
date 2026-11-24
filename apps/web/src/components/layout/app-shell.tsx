@@ -1,94 +1,84 @@
 import type { ReactNode } from "react";
-import { ChartColumnIcon, FlaskConicalIcon, HouseIcon, LogOutIcon, ScrollTextIcon, SettingsIcon, TimerIcon, WatchIcon } from "lucide-react";
-import { useApp, useLive } from "@/app-context";
+import { ChartColumnIcon, CloudOffIcon, HouseIcon, LogOutIcon, SettingsIcon, WatchIcon } from "lucide-react";
+import { useApp } from "@/app-context";
 import { useAuth, useMe } from "@/auth";
+import { fmtRelative } from "@bridge/core/format";
 import { navigate, usePath } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { to: "/", label: "Home", icon: HouseIcon },
-  { to: "/devices", label: "Dispositivi", icon: WatchIcon },
   { to: "/charts", label: "Grafici", icon: ChartColumnIcon },
-  { to: "/workouts", label: "Attività", icon: TimerIcon },
+  { to: "/devices", label: "Dispositivi", icon: WatchIcon },
   { to: "/settings", label: "Impostazioni", icon: SettingsIcon },
 ];
 
-const isActive = (path: string, to: string) => (to === "/" ? path === "/" : path === to || path.startsWith(to + "/") || path.startsWith(to + "?"));
+/** the menu entry of a path: "/" only for the Home itself, the others also for their sub-pages */
+export const isActive = (path: string, to: string) => {
+  const p = path.split("?")[0];
+  return to === "/" ? p === "/" || p === "" : p === to || p.startsWith(to + "/");
+};
 
 export function AppShell({ children }: { children: ReactNode }) {
   const path = usePath();
-  const { devices, dbInfo, user, leaveDemo } = useApp();
   const me = useMe();
   const { logout } = useAuth();
-  const live = useLive();
-  const connected = devices.filter((d) => {
-    const s = live.get(d.id)?.state;
-    return s && s !== "idle" && s !== "disconnected";
-  });
+  const { status } = useApp();
   return (
     <div className="min-h-dvh md:flex">
       <aside className="bg-card sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r md:flex">
         <div className="flex items-center gap-2.5 px-5 pt-5 pb-6">
           <img src="icon.svg" alt="" className="size-8" />
           <div>
-            <div className="font-semibold leading-tight">VitaBridge</div>
-            <div className="text-muted-foreground text-xs">I tuoi dati, sul tuo dispositivo</div>
+            <div className="leading-tight font-semibold">{me.app.label}</div>
+            <div className="text-muted-foreground text-xs">I tuoi dati dello studio</div>
           </div>
         </div>
-        <nav className="flex flex-1 flex-col gap-1 px-3">
-          {NAV.map((n) => (
-            <a
-              key={n.to}
-              href={`#${n.to}`}
-              className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                isActive(path, n.to) ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-            >
-              <n.icon className="size-4" />
-              {n.label}
-            </a>
-          ))}
-          <a
-            href="#/logs"
-            className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              isActive(path, "/logs") ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            <ScrollTextIcon className="size-4" />
-            Log
-          </a>
+        <nav className="flex flex-1 flex-col gap-1 px-3" aria-label="Sezioni">
+          {NAV.map((n) => {
+            const active = isActive(path, n.to);
+            return (
+              <a
+                key={n.to}
+                href={`#${n.to}`}
+                aria-current={active ? "page" : undefined}
+                // the current page must not look like the entry under the mouse: bold, with a bar on the left
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
+                  active ? "bg-accent text-accent-foreground font-semibold shadow-[inset_3px_0_0_var(--primary)]" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground font-medium",
+                )}
+              >
+                <n.icon className="size-4" />
+                {n.label}
+              </a>
+            );
+          })}
         </nav>
         <div className="text-muted-foreground space-y-1 border-t px-5 py-4 text-xs">
           <div className="flex items-center gap-2">
-            <span className={cn("size-2 rounded-full", connected.length ? "bg-steps" : "bg-muted-foreground/40")} />
-            {connected.length ? `${connected.length} dispositivo connesso` : "Nessun dispositivo connesso"}
+            {status.error ? <CloudOffIcon className="size-3.5" /> : <span className={cn("size-2 rounded-full", status.syncing ? "bg-steps animate-pulse" : "bg-steps")} />}
+            {status.syncing ? "Sincronizzazione…" : `Aggiornato ${fmtRelative(status.lastSyncAt ? status.lastSyncAt / 1000 : null)}`}
           </div>
-          <div>{dbInfo.persistent ? "Database SQLite locale (OPFS)" : "Database temporaneo (in memoria)"}</div>
           <button onClick={() => void logout()} className="hover:text-foreground mt-2 flex items-center gap-2 font-medium">
             <LogOutIcon className="size-3.5" /> Esci ({me.account.username})
           </button>
         </div>
       </aside>
       <div className="min-w-0 flex-1 pb-20 md:pb-0">
-        {!!user.is_demo && (
-          <div className="bg-accent text-accent-foreground flex items-center gap-2 border-b px-4 py-2 text-sm md:px-8">
-            <FlaskConicalIcon className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1">Stai guardando i dati demo, separati dai tuoi.</span>
-            <button onClick={() => void leaveDemo()} className="shrink-0 font-semibold underline underline-offset-2">
-              Torna ai tuoi dati
-            </button>
+        {status.error && (
+          <div className="bg-muted text-muted-foreground flex items-center gap-2 border-b px-4 py-2 text-sm md:px-8" role="status">
+            <CloudOffIcon className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1">{status.error}</span>
           </div>
         )}
         {children}
       </div>
-      <nav className="bg-card/95 pb-safe fixed inset-x-0 bottom-0 z-40 border-t backdrop-blur md:hidden">
-        <div className="grid grid-cols-5">
+      <nav className="bg-card/95 pb-safe fixed inset-x-0 bottom-0 z-40 border-t backdrop-blur md:hidden" aria-label="Sezioni">
+        <div className="grid grid-cols-4">
           {NAV.map((n) => {
             const active = isActive(path, n.to);
             return (
-              <button key={n.to} onClick={() => navigate(n.to)} className="flex flex-col items-center gap-1 py-2 text-[11px] font-medium">
+              <button key={n.to} onClick={() => navigate(n.to)} aria-current={active ? "page" : undefined} className="flex flex-col items-center gap-1 py-2 text-[11px] font-medium">
                 <span className={cn("flex h-7 w-14 items-center justify-center rounded-full transition-colors", active ? "bg-accent text-accent-foreground" : "text-muted-foreground")}>
                   <n.icon className="size-5" />
                 </span>
