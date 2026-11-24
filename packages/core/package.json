@@ -7,5 +7,9 @@
   "license": "AGPL-3.0-or-later",
   "exports": {
     "./*": "./src/*.ts"
+  },
+  "devDependencies": {
+    "@bridge/synth": "*",
+    "@sqlite.org/sqlite-wasm": "^3.50.4-build1"
   }
 }

@@ -5,6 +5,7 @@
  */
 import { isAbsolute, resolve } from "node:path";
 import { DATASETS, isAppId, type AppId } from "@bridge/core/datasets";
+import { DEFAULT_VALID_DAY_HOURS } from "@bridge/core/metrics";
 
 export type DataConfig =
   | { mode: "file"; file: string }
@@ -40,6 +41,8 @@ export interface Config {
   /** inactivity after which a session ends, per role (milliseconds) */
   sessionIdleMs: { participant: number; admin: number };
   login: { maxFailures: number; windowMs: number };
+  /** hours with heart rate for a valid day: one value for the app, the comparison and the tests */
+  validDayHours: number;
 }
 
 export class ConfigError extends Error {}
@@ -126,8 +129,15 @@ export function loadConfig(env: NodeJS.ProcessEnv, baseDir = process.cwd()): Con
     ...loadAuthConfig(env, baseDir),
     admin: adminUser && adminPassword ? { username: adminUser, password: adminPassword } : null,
     login: { maxFailures: num(env, "LOGIN_MAX_FAILURES", 5, 1), windowMs: num(env, "LOGIN_WINDOW_MIN", 15, 1) * 60_000 },
+    validDayHours: validDayHours(env),
   };
 }
+
+const validDayHours = (env: NodeJS.ProcessEnv) => {
+  const h = num(env, "VALID_DAY_MIN_HOURS", DEFAULT_VALID_DAY_HOURS, 1);
+  if (!Number.isInteger(h) || h > 24) throw new ConfigError(`VALID_DAY_MIN_HOURS deve essere un numero intero tra 1 e 24 (trovato «${env.VALID_DAY_MIN_HOURS}»)`);
+  return h;
+};
 
 /** Only what the accounts database needs (also used by the administrator commands, src/admin-cli.ts). */
 export function loadAuthConfig(env: NodeJS.ProcessEnv, baseDir = process.cwd()): Pick<Config, "app" | "authDb" | "sessionIdleMs"> {
@@ -164,6 +174,7 @@ export function describeConfig(c: Config) {
     secureCookies: c.secureCookies,
     data: c.data.mode === "file" ? { mode: "file", file: c.data.file } : { mode: "backup", url: c.data.url, dir: c.data.dir, intervalMin: c.data.intervalMin, minAgeMin: c.data.minAgeMin },
     authDb: c.authDb,
+    validDayHours: c.validDayHours,
     sessionIdle: { participantDays: c.sessionIdleMs.participant / 86_400_000, adminHours: c.sessionIdleMs.admin / 3_600_000 },
   };
 }

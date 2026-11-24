@@ -7,17 +7,14 @@
  */
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { describe, expect, it } from "vitest";
-import { importFit } from "../src/lib/db/importer";
-import { addDevice, ensureDefaultUser } from "../src/lib/db/repo";
-import { oo1Executor, type Oo1Db } from "@bridge/core/db/sql";
+import { oo1Executor, type Oo1Db } from "../src/db/sql";
 import { BaseType as B } from "@bridge/synth/fit/decoder";
 import { FitEncoder, toGarminTs } from "@bridge/synth/fit/encoder";
 import { fitToServerRows, type Row } from "@bridge/synth/server/fit-to-server";
-import { SERVER_SCHEMA } from "@bridge/core/server/schema";
-import { insertServerRows } from "@bridge/core/server/server-source";
-import { createLocalViews } from "@bridge/core/server/views";
-import { zoneTransitions } from "@bridge/core/time-zone";
-import { memoryDb } from "./helpers";
+import { SERVER_SCHEMA } from "../src/server/schema";
+import { insertServerRows } from "../src/server/server-source";
+import { createLocalViews } from "../src/server/views";
+import { zoneTransitions } from "../src/time-zone";
 
 const OFFSET = 9 * 3600; // the band's clock: Asia/Tokyo, no daylight saving
 /** band midnight starting 5 November 2026 (Tokyo), as unix seconds */
@@ -163,21 +160,6 @@ describe("server format of hand-written FIT files (Gadgetbridge's FitImporter ru
     // no row for the not-worn minutes, -1 shown as NULL
     const n = await db.all<{ n: number }>("SELECT COUNT(*) AS n FROM activity_sample");
     expect(n[0].n).toBe(4 + 4 + 1 + 2); // evening samples, short gap rows, the midnight row, the next day's samples
-  });
-
-  it("the app's importer restarts the counters at the band's midnight and keeps the midnight totals", async () => {
-    const { db } = await memoryDb();
-    const me = await ensureDefaultUser(db);
-    const dev = await addDevice(db, { user_id: me.id, name: "x" });
-    for (const f of [fileA, fileB]) await importFit(db, { deviceId: dev.id, userId: me.id }, f);
-    const sum = async (from: number, to: number) =>
-      (await db.all<{ s: number; d: number; c: number }>(
-        "SELECT SUM(steps) AS s, SUM(distance_cm) AS d, SUM(active_calories) AS c FROM activity_sample WHERE timestamp >= ? AND timestamp < ?",
-        [from, to],
-      ))[0];
-    expect(await sum(M - 24 * H, M)).toEqual({ s: 400, d: 30000, c: 22 });
-    // with the counters carried over midnight, generic would count 16 - 7 = 9 kcal
-    expect(await sum(M, M + 24 * H)).toEqual({ s: 4, d: 300, c: 17 });
   });
 });
 

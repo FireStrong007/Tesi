@@ -13,6 +13,7 @@ import { bodyLimit } from "hono/body-limit";
 import { compress } from "hono/compress";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { DATASETS } from "@bridge/core/datasets";
+import { STUDY_TIME_ZONE } from "@bridge/core/time-zone";
 import type { Config } from "./config";
 import { NoDataError, type DataSource } from "./data-source";
 import type { LoginLimiter } from "./auth/limiter";
@@ -164,7 +165,9 @@ export function createApp(deps: AppDeps) {
 
   // ------------------------------------------------------------ authentication
 
-  const me = (c: C, s: { account: Account; csrfToken: string }) => c.json({ account: publicAccount(s.account), csrfToken: s.csrfToken, app: { id: ds.app, label: ds.label } });
+  // what the app needs to compute like the server: the study's time zone and the valid day rule
+  const study = { timeZone: STUDY_TIME_ZONE, validDayHours: config.validDayHours };
+  const me = (c: C, s: { account: Account; csrfToken: string }) => c.json({ account: publicAccount(s.account), csrfToken: s.csrfToken, app: { id: ds.app, label: ds.label }, study });
 
   app.post("/api/auth/login", async (c) => {
     const b = await body<{ username: string; password: string }>(c);
@@ -211,7 +214,7 @@ export function createApp(deps: AppDeps) {
   // not logged in is an ordinary answer here (the login screen asks it at every start)
   app.get("/api/auth/me", (c) => {
     const s = c.get("session");
-    return s ? me(c, s) : c.json({ account: null, csrfToken: null, app: { id: ds.app, label: ds.label } });
+    return s ? me(c, s) : c.json({ account: null, csrfToken: null, app: { id: ds.app, label: ds.label }, study });
   });
 
   app.post("/api/auth/password", requireSession, async (c) => {

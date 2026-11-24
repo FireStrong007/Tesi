@@ -59,7 +59,7 @@ import {
 import { loadDay, type DayData } from "@bridge/core/day-data";
 import { addDays, sleepTotal, startOfDay, type User } from "@/lib/db/repo";
 import { fmtDay, fmtDayLong, fmtDayMonth, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
-import { STRESS_LEVELS, STRESS_MIN_VALID, VALID_DAY_MIN_HR_HOURS, estimateBmr, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@bridge/core/metrics";
+import { STRESS_LEVELS, STRESS_MIN_VALID, estimateBmr, getValidDayHours, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@bridge/core/metrics";
 import { loadRange, type DayAgg, type RangeData } from "@bridge/core/range-data";
 import { userServerRange } from "@/lib/server/user-mirror";
 import { navigate, query, usePath } from "@/lib/router";
@@ -948,7 +948,7 @@ function comparisonView(
  */
 function invalidNote(r: RangeData, i: number): TipLine[] | undefined {
   if (r.valid[i] || !r.hrHours[i] || r.days[i] >= startOfDay(Date.now() / 1000)) return undefined;
-  return [{ text: `Indossato ${r.hrHours[i]} h su ${VALID_DAY_MIN_HR_HOURS}: escluso dalle medie`, sub: true }];
+  return [{ text: `Indossato ${r.hrHours[i]} h su ${getValidDayHours()}: escluso dalle medie`, sub: true }];
 }
 
 // midnight n days after the day of d, in the study's time zone

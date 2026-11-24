@@ -1,14 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { distributionOfUsers, MIN_USERS, positionOf, quantile, standingAmong, summarySentence, type PeriodStanding } from "@bridge/core/comparison/aggregate";
-import { metricValue, periodValue, userDailyValues, weeklyTotal, weeksCovering, type DayFacts } from "@bridge/core/comparison/daily-values";
-import { DemoComparisonSource, demoCohort } from "../src/lib/comparison/demo-source";
-import { COMPARE_METRICS } from "@bridge/core/comparison/types";
-import { importFit } from "../src/lib/db/importer";
-import { addDays, addDevice, ensureDefaultUser, startOfDay } from "../src/lib/db/repo";
-import { generateDemoFiles } from "@bridge/synth/demo/generator";
-import { MIN_VALID_DAYS, VALID_DAY_MIN_HR_HOURS, isValidDay } from "@bridge/core/metrics";
-import { loadRange } from "@bridge/core/range-data";
-import { memoryDb } from "./helpers";
+import { afterEach, describe, expect, it } from "vitest";
+import { distributionOfUsers, MIN_USERS, positionOf, quantile, standingAmong, summarySentence, type PeriodStanding } from "../src/comparison/aggregate";
+import { metricValue, periodValue, weeklyTotal, weeksCovering, type DayFacts } from "../src/comparison/daily-values";
+import { addDays, startOfDay } from "../src/db/queries";
+import { DEFAULT_VALID_DAY_HOURS, MIN_VALID_DAYS, getValidDayHours, isValidDay, setValidDayHours } from "../src/metrics";
+import { loadRange } from "../src/range-data";
+import { createLocalViews } from "../src/server/views";
+import { localParts } from "../src/time-zone";
+import { addParticipant, serverDb } from "./helpers";
 
 const NOW = new Date("2026-10-28T20:00:00");
 const nowTs = Math.floor(NOW.getTime() / 1000);
@@ -96,16 +94,26 @@ describe("valid days and period values", () => {
     stressAvg: 30, bodyBatteryMax: 80, spo2Avg: null, respirationAvg: 15, hrvNightAvg: null,
   });
 
-  it("a day with the band worn less than 10 hours is no data, not 0", () => {
-    expect(VALID_DAY_MIN_HR_HOURS).toBe(10);
-    expect(isValidDay(9)).toBe(false);
-    expect(isValidDay(10)).toBe(true);
+  afterEach(() => setValidDayHours(DEFAULT_VALID_DAY_HOURS));
+
+  it("a day with the band worn less than 12 hours is no data, not 0", () => {
+    expect(getValidDayHours()).toBe(12);
+    expect(isValidDay(11)).toBe(false);
+    expect(isValidDay(12)).toBe(true);
     expect(metricValue("steps", facts(0, 0))).toBeNull();
     expect(metricValue("steps", facts(4, 300))).toBeNull();
-    expect(metricValue("calories", facts(9))).toBeNull();
-    expect(metricValue("intensity", facts(9))).toBeNull();
+    expect(metricValue("calories", facts(11))).toBeNull();
+    expect(metricValue("intensity", facts(11))).toBeNull();
     expect(metricValue("steps", facts(14, 0))).toBe(0); // worn all day without walking: a real 0
     expect(metricValue("intensity", facts(14))).toBe(20);
+  });
+
+  it("the threshold is configurable, one value for everyone", () => {
+    setValidDayHours(10);
+    expect(isValidDay(10)).toBe(true);
+    expect(metricValue("steps", facts(10, 5000))).toBe(5000);
+    expect(() => setValidDayHours(0)).toThrow();
+    expect(() => setValidDayHours(25)).toThrow();
   });
 
   it("a period value is the mean of the valid days", () => {
@@ -116,7 +124,7 @@ describe("valid days and period values", () => {
 
   it("weekly totals: Monday to Sunday, valid days only, mean over complete weeks", () => {
     const monday = weeksCovering(addDays(today, -20), today)[0].start;
-    expect(new Date(monday * 1000).getDay()).toBe(1);
+    expect(localParts(monday).weekday).toBe(1);
     const days = Array.from({ length: 21 }, (_, i) => addDays(monday, i));
     const values = days.map((_, i) => (i < 7 ? 10 : i < 14 ? (i % 2 ? 30 : null) : 5));
     const [w1, w2] = weeksCovering(days[0], addDays(days[20], 1));
@@ -132,110 +140,14 @@ describe("valid days and period values", () => {
   });
 });
 
-describe("demo comparison cohort", () => {
-  const from = addDays(today, -9);
-
-  it("excludes the current user from the distribution", async () => {
-    const src = new DemoComparisonSource({ now: () => nowTs });
-    const all = await src.dailyDistribution("steps", from, today);
-    const without = await src.dailyDistribution("steps", from, today, { excludeUserId: "demo-03" });
-    all.forEach((a, i) => {
-      const values = (excluded?: string) => src.members.filter((m) => m.id !== excluded).map((m) => metricValue("steps", src.factsOf(m, a.day)));
-      expect(a).toEqual({ day: a.day, ...distributionOfUsers(values()) });
-      expect(without[i]).toEqual({ day: a.day, ...distributionOfUsers(values("demo-03")) });
-      const mine = metricValue("steps", src.factsOf(src.members.find((m) => m.id === "demo-03")!, a.day));
-      expect(without[i].n).toBe(mine == null ? a.n : a.n - 1);
-      expect(a.p25! < a.median! && a.median! < a.p75!).toBe(true);
-    });
-  });
-
-  it("hides median and percentiles with fewer than 5 people", async () => {
-    const src = new DemoComparisonSource({ size: 4, now: () => nowTs });
-    for (const a of await src.dailyDistribution("steps", from, today)) {
-      expect(a.n).toBeLessThanOrEqual(4);
-      expect([a.median, a.p25, a.p75]).toEqual([null, null, null]);
-    }
-  });
-
-  it("is deterministic and a day does not depend on the period asked", async () => {
-    expect(demoCohort()).toEqual(demoCohort());
-    const a = await new DemoComparisonSource({ now: () => nowTs }).dailyDistribution("sleep", from, today);
-    const b = await new DemoComparisonSource({ now: () => nowTs + 86400 * 40 }).dailyDistribution("sleep", addDays(from, -20), today);
-    expect(b.slice(20)).toEqual(a);
-    // months back works too, with realistic and varied values
-    const old = await new DemoComparisonSource().dailyDistribution("steps", addDays(today, -200), addDays(today, -190));
-    for (const d of old) {
-      expect(d.n).toBeGreaterThanOrEqual(35);
-      expect(d.median!).toBeGreaterThan(3000);
-      expect(d.median!).toBeLessThan(16000);
-    }
-    const src = new DemoComparisonSource({ now: () => nowTs });
-    const steps = src.members.map((m) => metricValue("steps", src.factsOf(m, addDays(today, -3)))).filter((v): v is number => v != null);
-    expect(Math.max(...steps) / Math.min(...steps)).toBeGreaterThan(2);
-  }, 30_000);
-
-  it("ranks the user among the other users' period values, with at least 5 of them", async () => {
-    const src = new DemoComparisonSource({ now: () => nowTs });
-    const st = await src.periodStanding("steps", from, today, 9000);
-    expect(st.n).toBeGreaterThanOrEqual(30);
-    expect(st.p25! < st.median! && st.median! < st.p75!).toBe(true);
-    expect(st.percentile!).toBeGreaterThan(0);
-    expect(st.percentile!).toBeLessThan(100);
-    // the rank follows the value
-    expect((await src.periodStanding("steps", from, today, 2000)).percentile!).toBeLessThan(st.percentile!);
-    const few = await new DemoComparisonSource({ size: 4, now: () => nowTs }).periodStanding("steps", from, today, 9000);
-    expect(few.n).toBeLessThanOrEqual(4);
-    expect([few.median, few.p25, few.p75, few.percentile]).toEqual([null, null, null, null]);
-  });
-
-  it("compares intensity on weekly totals", async () => {
-    const src = new DemoComparisonSource({ now: () => nowTs });
-    const weeks = await src.weeklyDistribution("intensity", addDays(today, -27), addDays(today, 1));
-    expect(new Date(weeks[0].day * 1000).getDay()).toBe(1);
-    for (const w of weeks.slice(0, -1)) {
-      expect(w.n).toBeGreaterThanOrEqual(30);
-      expect(w.median!).toBeGreaterThan(20);
-    }
-  });
-
-  it("future days have no data", async () => {
-    const src = new DemoComparisonSource({ now: () => nowTs });
-    const [d] = await src.dailyDistribution("steps", addDays(today, 1), addDays(today, 2));
-    expect(d).toEqual({ day: addDays(today, 1), median: null, p25: null, p75: null, n: 0 });
-  });
-
-  it("computes each person's day with the same rules as loadRange", async () => {
-    const src = new DemoComparisonSource({ now: () => nowTs });
-    for (const member of src.members.slice(0, 2)) {
-      const m = { ...member, wear: 1, hasSpo2: true, hasHrv: true };
-      const { db } = await memoryDb();
-      const user = await ensureDefaultUser(db);
-      const dev = await addDevice(db, { user_id: user.id, name: "vívosmart 5" });
-      // 20 days imported, the last 10 compared: the band's counters and the midnight samples of
-      // the earlier days are then the same in the database and in the cohort
-      for (const f of generateDemoFiles({ days: 20, seed: m.seed, persona: m.persona, now: NOW })) await importFit(db, { deviceId: dev.id, userId: user.id }, f.data);
-      const rFrom = addDays(today, -9);
-      const r = await loadRange(db, user.id, rFrom, addDays(today, 1));
-      for (const metric of COMPARE_METRICS) {
-        const mine = userDailyValues(metric, r);
-        r.days.forEach((d, i) => {
-          const theirs = metricValue(metric, src.factsOf(m, d));
-          if (mine[i] == null || theirs == null) expect({ metric, d, v: theirs }).toEqual({ metric, d, v: mine[i] });
-          else expect(theirs, `${metric} ${new Date(d * 1000).toDateString()}`).toBeCloseTo(mine[i]!, 6);
-        });
-      }
-    }
-  }, 30_000); // simulates and imports 20 days for two people
-});
-
 describe("loadRange stress average", () => {
   it("ignores samples that are not measurements (< 1)", async () => {
-    const { db } = await memoryDb();
-    const user = await ensureDefaultUser(db);
-    const dev = await addDevice(db, { user_id: user.id, name: "x" });
+    const db = serverDb();
+    const { pid, did } = await addParticipant(db, "p");
     for (const [t, v] of [[today + 3600, 0], [today + 7200, 40], [today + 10800, 60]])
-      await db.run("INSERT INTO stress_sample VALUES (?,?,?,?)", [dev.id, user.id, t, v]);
-    const r = await loadRange(db, user.id, today, addDays(today, 1));
+      await db.run("INSERT INTO GARMIN_STRESS_SAMPLE (TIMESTAMP, DEVICE_ID, USER_ID, STRESS) VALUES (?, ?, ?, ?)", [t * 1000, did, pid, v]);
+    await createLocalViews(db);
+    const r = await loadRange(db, pid, today, addDays(today, 1));
     expect(r.stress[0].avg).toBe(50);
     expect(r.stress[0].min).toBe(40);
   });

@@ -116,12 +116,20 @@ export function restingCalories(bmrPerDay: number | null, dayStart: number, dayE
 
 /**
  * A day counts in averages and comparisons only if the band was worn for most of it: heart rate
- * recorded in at least this many distinct hours. A day without the band (or with only a few
- * hours) is "no data", not 0. This is the only definition, used for the user's own data
- * (loadRange) and for the comparison cohort alike.
+ * recorded in at least this many distinct hours (any device: one reading in an hour is enough, so
+ * the rule also fits watches that measure every 15–20 minutes). A day without the band, or with
+ * only a few hours, is "no data", not 0. This is the only definition, for the user's own data
+ * (loadRange) and for the other participants alike. Configurable: the server reads
+ * VALID_DAY_MIN_HOURS and sends it to the app, both call setValidDayHours at start.
  */
-export const VALID_DAY_MIN_HR_HOURS = 10;
-export const isValidDay = (hoursWithHeartRate: number) => hoursWithHeartRate >= VALID_DAY_MIN_HR_HOURS;
+export const DEFAULT_VALID_DAY_HOURS = 12;
+let validDayHours = DEFAULT_VALID_DAY_HOURS;
+export const getValidDayHours = () => validDayHours;
+export function setValidDayHours(hours: number) {
+  if (!Number.isInteger(hours) || hours < 1 || hours > 24) throw new Error(`Ore per un giorno valido non ammesse: ${hours} (1–24)`);
+  validDayHours = hours;
+}
+export const isValidDay = (hoursWithHeartRate: number) => hoursWithHeartRate >= validDayHours;
 
 /** The summary judgement against other users needs at least this many valid days in the period. */
 export const MIN_VALID_DAYS = 7;

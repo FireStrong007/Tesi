@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { serve } from "@hono/node-server";
 import { DATASETS } from "@bridge/core/datasets";
+import { setValidDayHours } from "@bridge/core/metrics";
 import { createApp, ensureFirstAdmin } from "./app";
 import { LoginLimiter } from "./auth/limiter";
 import { AuthStore } from "./auth/store";
@@ -30,6 +31,8 @@ try {
   throw e;
 }
 const log = createLogger({ secrets: configSecrets(config) });
+// one definition of a valid day for everything this process computes
+setValidDayHours(config.validDayHours);
 log.info("Avvio", describeConfig(config));
 
 const auth = new AuthStore(config.authDb, config.sessionIdleMs);

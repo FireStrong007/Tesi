@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { importFit } from "../src/lib/db/importer";
-import { addDays, addDevice, ensureDefaultUser, sleepSessions, sleepTotal, startOfDay } from "../src/lib/db/repo";
 import { BaseType as B } from "@bridge/synth/fit/decoder";
 import { FitEncoder, toGarminTs } from "@bridge/synth/fit/encoder";
-import { memoryDb } from "./helpers";
+import { fitToServerRows } from "@bridge/synth/server/fit-to-server";
+import { addDays, sleepSessions, sleepTotal, startOfDay } from "../src/db/queries";
+import { insertServerRows } from "../src/server/server-source";
+import { createLocalViews } from "../src/server/views";
+import { addParticipant, serverDb } from "./helpers";
 
 /** The structure of the real vívosmart 5 SLEEP file of the night 2→3 November 2026 (from a Gadgetbridge export). */
 function realNight() {
@@ -25,13 +27,16 @@ function realNight() {
 
 describe("sleep as written by a real vívosmart 5", () => {
   it("one night from the sleep start/end events; each stage sample closes the stage (Gadgetbridge semantics)", async () => {
-    const { db } = await memoryDb();
-    const user = await ensureDefaultUser(db);
-    const dev = await addDevice(db, { user_id: user.id, name: "vívosmart 5" });
+    // as on the research server: the file converted with Gadgetbridge's rules, seen through the views
+    const db = serverDb();
+    const { pid, did } = await addParticipant(db, "p");
     const { data, t } = realNight();
-    await importFit(db, { deviceId: dev.id, userId: user.id }, data);
+    const { rows, errors } = fitToServerRows([data]);
+    expect(errors).toEqual([]);
+    await insertServerRows(db, pid, did, rows);
+    await createLocalViews(db);
     const day = startOfDay(t("12:00"));
-    const nights = await sleepSessions(db, user.id, day, addDays(day, 1));
+    const nights = await sleepSessions(db, pid, day, addDays(day, 1));
     expect(nights.length).toBe(1);
     const n = nights[0];
     expect(n.start).toBe(t("02:05"));
@@ -44,7 +49,5 @@ describe("sleep as written by a real vívosmart 5", () => {
     expect(sleepTotal(n)).toBe(385);
     expect(n.score).toBe(77);
     expect(n.day).toBe(day);
-    const restless = await db.all<{ timestamp: number }>("SELECT timestamp FROM sleep_restless_sample");
-    expect(restless[0].timestamp).toBeGreaterThan(t("00:00")); // relative sleep_start is not used as a date
   });
 });

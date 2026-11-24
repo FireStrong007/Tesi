@@ -1,38 +1,18 @@
-import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
+/**
+ * The views that show the research server's Gadgetbridge tables with the app's schema, and the
+ * comparison computed on the server's participants through them.
+ */
 import { describe, expect, it } from "vitest";
-import { userDailyValues } from "@bridge/core/comparison/daily-values";
-import { DemoComparisonSource, demoCohort } from "../src/lib/comparison/demo-source";
-import { COMPARE_METRICS } from "@bridge/core/comparison/types";
-import { importFit } from "../src/lib/db/importer";
-import { addDays, addDevice, ensureDefaultUser, startOfDay } from "../src/lib/db/repo";
-import { oo1Executor, type Oo1Db, type SqlExecutor } from "@bridge/core/db/sql";
+import { demoCohort } from "@bridge/synth/demo/cohort";
 import { generateDemoFiles } from "@bridge/synth/demo/generator";
-import { loadRange } from "@bridge/core/range-data";
 import { fitToServerRows, type Row } from "@bridge/synth/server/fit-to-server";
-import { ActivityKind, SERVER_SCHEMA } from "@bridge/core/server/schema";
-import { ServerComparisonSource, insertServerRows, participantsOf } from "@bridge/core/server/server-source";
-import { createLocalViews } from "@bridge/core/server/views";
-import { memoryDb } from "./helpers";
+import { addDays, startOfDay } from "../src/db/queries";
+import { ActivityKind } from "../src/server/schema";
+import { ServerComparisonSource, insertServerRows, participantsOf } from "../src/server/server-source";
+import { createLocalViews } from "../src/server/views";
+import { addParticipant, serverDb } from "./helpers";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const sqlite3 = await (sqlite3InitModule as any)({ print: () => {}, printErr: () => {} });
-
-/** An empty server database with the professor's schema. */
-function serverDb(): SqlExecutor {
-  const raw = new sqlite3.oo1.DB(":memory:") as Oo1Db;
-  raw.exec({ sql: SERVER_SCHEMA });
-  return oo1Executor(raw);
-}
-
-/** Adds a participant with one band; returns their ids. */
-async function addParticipant(db: SqlExecutor, name: string) {
-  const p = await db.run("INSERT INTO participant (name, api_key_hash, created_at) VALUES (?, ?, 0)", [name, `hash-${name}`]);
-  const pid = p.lastInsertRowid;
-  const d = await db.run("INSERT INTO device (participant_id, identifier, name, manufacturer, type, type_name) VALUES (?, ?, 'vívosmart 5', 'Garmin', 0, 'GARMIN')", [pid, `serial-${name}`]);
-  return { pid, did: d.lastInsertRowid };
-}
-
-const NOW = new Date("2026-11-08T21:00:00");
+const NOW = new Date("2026-11-08T21:00:00+01:00");
 const nowTs = Math.floor(NOW.getTime() / 1000);
 const today = startOfDay(nowTs);
 
@@ -71,31 +51,6 @@ describe("server views: the server's Gadgetbridge tables seen with the app's sch
     ]);
   });
 
-  it("gives loadRange the same days as the app's own import of the same FIT files", async () => {
-    const files = generateDemoFiles({ days: 10, seed: 4242, now: NOW });
-    // the app: FIT files -> importer -> its tables
-    const { db: app } = await memoryDb();
-    const me = await ensureDefaultUser(app);
-    const dev = await addDevice(app, { user_id: me.id, name: "x" });
-    for (const f of files) await importFit(app, { deviceId: dev.id, userId: me.id }, f.data);
-    // the server: FIT files -> Gadgetbridge format -> its tables -> views
-    const server = serverDb();
-    const { pid, did } = await addParticipant(server, "p1");
-    const { rows, errors } = fitToServerRows(files.map((f) => f.data));
-    expect(errors).toEqual([]);
-    await insertServerRows(server, pid, did, rows);
-    await createLocalViews(server);
-
-    const from = addDays(today, -7);
-    const a = await loadRange(app, me.id, from, today);
-    const b = await loadRange(server, pid, from, today);
-    expect(b.totals).toEqual(a.totals);
-    expect(b.stressByLevel).toEqual(a.stressByLevel);
-    expect(b.hrHours).toEqual(a.hrHours);
-    expect(b.valid).toEqual(a.valid);
-    expect(b.sleep.map((s) => s && { start: s.start, end: s.end, minutes: s.minutes })).toEqual(a.sleep.map((s) => s && { start: s.start, end: s.end, minutes: s.minutes }));
-    for (const metric of COMPARE_METRICS) expect(userDailyValues(metric, b), metric).toEqual(userDailyValues(metric, a));
-  }, 60_000);
 });
 
 describe("comparison on the server's participants", () => {
@@ -122,22 +77,6 @@ describe("comparison on the server's participants", () => {
     }
     const d = await one.dailyDistribution("steps", from, today);
     expect(d.every((x) => x.n === 6 && x.median != null)).toBe(true);
-  }, 120_000);
-
-  it("gives the same values as the demo cohort built from the same people", async () => {
-    // same people, same days: the server path (FIT -> server tables -> views -> loadRange) and the
-    // demo path (simulation -> day facts) must agree, as both follow the app's rules
-    const src = await ServerComparisonSource.open(await server(5, 1), () => nowTs);
-    const demo = new DemoComparisonSource({ size: 5, now: () => nowTs });
-    for (const m of demo.members) Object.assign(m, { wear: 1, hasSpo2: true, hasHrv: true });
-    for (const metric of ["steps", "calories", "sleep", "resting_hr", "stress", "body_battery", "respiration", "intensity"] as const) {
-      const a = await src.dailyDistribution(metric, from, today);
-      const b = await demo.dailyDistribution(metric, from, today);
-      a.forEach((x, i) => {
-        expect(x.n, metric).toBe(b[i].n);
-        expect(x.median!, metric).toBeCloseTo(b[i].median!, 6);
-      });
-    }
   }, 120_000);
 
   it("leaves out the asking participant and needs 5 others", async () => {
