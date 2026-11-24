@@ -18,7 +18,9 @@
     "gen:fit-profile": "python3 scripts/gen-fit-profile.py ../Gadgetbridge/FitCodeGenerator/src/main/resources/fit_profile.json > packages/synth/src/fit/profile.ts",
     "gen:synthetic": "tsx packages/synth/src/cli.ts",
     "dev:web": "npm run dev -w @bridge/web --",
-    "dev:server": "npm run dev -w @bridge/server"
+    "dev:server": "npm run dev -w @bridge/server",
+    "admin:create": "tsx packages/server/src/admin-cli.ts create",
+    "admin:reset-password": "tsx packages/server/src/admin-cli.ts reset-password"
   },
   "devDependencies": {
     "@types/node": "^22.16.0",

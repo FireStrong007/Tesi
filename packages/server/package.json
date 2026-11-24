@@ -10,8 +10,9 @@
   },
   "scripts": {
     "dev": "tsx watch src/main.ts",
-    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/server.js",
-    "start": "node dist/server.js"
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/server.js && esbuild src/admin-cli.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/admin.js",
+    "start": "node dist/server.js",
+    "admin": "node dist/admin.js"
   },
   "dependencies": {
     "@bridge/core": "*",

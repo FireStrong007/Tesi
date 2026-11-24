@@ -117,20 +117,30 @@ export function loadConfig(env: NodeJS.ProcessEnv, baseDir = process.cwd()): Con
   if (!!adminUser !== !!adminPassword) throw new ConfigError("ADMIN_USERNAME e ADMIN_PASSWORD vanno impostate insieme");
 
   return {
-    app,
     host: env.HOST?.trim() || (production ? "0.0.0.0" : "127.0.0.1"),
     port: num(env, "PORT", 8787, 1),
     publicOrigin,
     trustProxy: bool(env, "TRUST_PROXY", false),
     secureCookies: bool(env, "SECURE_COOKIES", origin.protocol === "https:"),
     data,
-    authDb: path(env.AUTH_DB?.trim() || `auth/${app}-auth.db`),
+    ...loadAuthConfig(env, baseDir),
     admin: adminUser && adminPassword ? { username: adminUser, password: adminPassword } : null,
+    login: { maxFailures: num(env, "LOGIN_MAX_FAILURES", 5, 1), windowMs: num(env, "LOGIN_WINDOW_MIN", 15, 1) * 60_000 },
+  };
+}
+
+/** Only what the accounts database needs (also used by the administrator commands, src/admin-cli.ts). */
+export function loadAuthConfig(env: NodeJS.ProcessEnv, baseDir = process.cwd()): Pick<Config, "app" | "authDb" | "sessionIdleMs"> {
+  const app = (env.APP ?? "vitabridge").trim();
+  if (!isAppId(app)) throw new ConfigError(`APP deve essere vitabridge o heartbridge (trovato «${app}»)`);
+  const authDb = env.AUTH_DB?.trim() || `auth/${app}-auth.db`;
+  return {
+    app,
+    authDb: isAbsolute(authDb) ? authDb : resolve(baseDir, authDb),
     sessionIdleMs: {
       participant: num(env, "SESSION_IDLE_DAYS_PARTICIPANT", 30, 0.01) * 86_400_000,
       admin: num(env, "SESSION_IDLE_HOURS_ADMIN", 8, 0.01) * 3_600_000,
     },
-    login: { maxFailures: num(env, "LOGIN_MAX_FAILURES", 5, 1), windowMs: num(env, "LOGIN_WINDOW_MIN", 15, 1) * 60_000 },
   };
 }
 

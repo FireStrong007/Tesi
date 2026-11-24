@@ -58,6 +58,9 @@ const ACTION_LABEL: Record<AuditEntry["action"], string> = {
   account_enabled: "ha riattivato",
 };
 
+/** actions run with npm run admin:... on the server are recorded as "cli:<system user>" */
+const actorLabel = (u: string) => (u.startsWith("cli:") ? `Comando sul server (${u.slice(4)})` : u);
+
 /** server times are in milliseconds */
 const when = (ms: number | null) => (ms == null ? "–" : fmtDateTime(ms / 1000));
 const deviceLabel = (d: Device) => [d.name, d.model ? `modello ${d.model}` : null, d.firmware_version ? `firmware ${d.firmware_version}` : null].filter(Boolean).join(" · ");
@@ -400,7 +403,7 @@ export function AdminApp() {
                   <li key={e.id} className="flex flex-col gap-0.5 py-2 sm:flex-row sm:gap-3">
                     <span className="text-muted-foreground shrink-0 tabular-nums sm:w-40">{when(e.at)}</span>
                     <span>
-                      <span className="font-medium">{e.actorUsername}</span> {ACTION_LABEL[e.action]} <span className="font-medium">{e.targetUsername}</span>
+                      <span className="font-medium">{actorLabel(e.actorUsername)}</span> {ACTION_LABEL[e.action]} <span className="font-medium">{e.targetUsername}</span>
                     </span>
                   </li>
                 ))}

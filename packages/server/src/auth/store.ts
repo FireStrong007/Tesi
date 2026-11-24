@@ -221,7 +221,8 @@ export class AuthStore {
 
   // ---------------------------------------------------------------- audit log
 
-  audit(actor: Account, action: AuditAction, target: Account) {
+  /** `actor`: an administrator's account, or a command run on the server (id null, see admin-cli.ts) */
+  audit(actor: { id: number | null; username: string }, action: AuditAction, target: Account) {
     this.db
       .prepare("INSERT INTO audit_log (at, actor_account_id, actor_username, action, target_account_id, target_username, participant_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(this.now(), actor.id, actor.username, action, target.id, target.username, target.participantId);
