@@ -68,10 +68,15 @@ export interface Page {
  * One page of a participant's rows of a table, in key order: rows with time ≥ since (in the table's
  * unit), after the cursor of the previous page.
  */
-export function readRows(db: DatabaseSync, info: TableInfo, participantId: number, opts: { since?: number; after?: string; limit?: number } = {}): Page {
+export function readRows(db: DatabaseSync, info: TableInfo, participantId: number, opts: { device?: number; since?: number; after?: string; limit?: number } = {}): Page {
   const limit = Math.min(Math.max(1, Math.floor(opts.limit ?? DEFAULT_PAGE)), MAX_PAGE);
   const where = [`USER_ID = ?`];
   const params: (number | string)[] = [participantId];
+  if (opts.device != null) {
+    if (!Number.isInteger(opts.device)) throw new BadRequest("Parametro device non valido");
+    where.push("DEVICE_ID = ?");
+    params.push(opts.device);
+  }
   if (opts.since != null) {
     if (!Number.isFinite(opts.since)) throw new BadRequest("Parametro since non valido");
     where.push(`${q(info.time)} >= ?`);
@@ -96,6 +101,27 @@ export function readRows(db: DatabaseSync, info: TableInfo, participantId: numbe
     return copy;
   });
   return { table: info.name, columns: info.columns, blobs: info.blobs, rows: out, next: more ? encodeCursor(keyIdx.map((i) => rows[rows.length - 1][i])) : null };
+}
+
+export interface DeviceCount {
+  device: number;
+  count: number;
+  /** latest time in the table's unit */
+  maxTime: number | null;
+}
+
+/**
+ * How many rows the participant has in each table, per device, with the latest time: the browser
+ * compares them with its copy and downloads a device's table again when they differ.
+ */
+export function countsOf(db: DatabaseSync, ds: Dataset, participantId: number): Record<string, DeviceCount[]> {
+  const out: Record<string, DeviceCount[]> = {};
+  for (const info of tableInfos(db, ds).values()) {
+    out[info.name] = db
+      .prepare(`SELECT DEVICE_ID AS device, count(*) AS count, max(${q(info.time)}) AS maxTime FROM ${q(info.name)} WHERE USER_ID = ? GROUP BY DEVICE_ID ORDER BY DEVICE_ID`)
+      .all(participantId) as unknown as DeviceCount[];
+  }
+  return out;
 }
 
 /** The participant's own devices, only the dataset's shown columns. */

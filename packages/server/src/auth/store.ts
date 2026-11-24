@@ -7,6 +7,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { DEFAULT_GOALS, checkGoals, type Goals } from "@bridge/core/goals";
 
 export type Role = "participant" | "admin";
 
@@ -86,6 +87,12 @@ const MIGRATIONS = [
     participant_id INTEGER
   );
   CREATE INDEX audit_log_at ON audit_log (at);`,
+  // the participant's goals (JSON, core/goals.ts), kept here so that they survive the logout
+  `CREATE TABLE account_settings (
+    account_id INTEGER PRIMARY KEY REFERENCES account(id) ON DELETE CASCADE,
+    goals TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );`,
 ];
 
 /** lower case, no spaces around, Unicode NFC */
@@ -166,6 +173,20 @@ export class AuthStore {
 
   recordLogin(id: number) {
     this.db.prepare("UPDATE account SET last_login_at = ? WHERE id = ?").run(this.now(), id);
+  }
+
+  /** the account's goals: the saved ones over the defaults */
+  goals(accountId: number): Goals {
+    const r = this.db.prepare("SELECT goals FROM account_settings WHERE account_id = ?").get(accountId) as { goals: string } | undefined;
+    if (!r) return { ...DEFAULT_GOALS };
+    const checked = checkGoals(JSON.parse(r.goals));
+    return "goals" in checked ? checked.goals : { ...DEFAULT_GOALS };
+  }
+
+  setGoals(accountId: number, goals: Goals) {
+    this.db
+      .prepare("INSERT INTO account_settings (account_id, goals, updated_at) VALUES (?, ?, ?) ON CONFLICT (account_id) DO UPDATE SET goals = excluded.goals, updated_at = excluded.updated_at")
+      .run(accountId, JSON.stringify(goals), this.now());
   }
 
   // ---------------------------------------------------------------- sessions

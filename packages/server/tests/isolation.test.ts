@@ -64,6 +64,12 @@ describe.each(CASES)("isolation between participants ($app)", ({ app, codes }) =
         expect(keys.size).toBe(rows.length);
         total += rows.length;
       }
+      // the counts are theirs too, per device
+      const counts = (await client.get<{ counts: Record<string, { device: number; count: number }[]> }>("/api/data/counts")).body.counts;
+      for (const t of tables) {
+        const inDb = raw.prepare(`SELECT DEVICE_ID AS device, count(*) AS count FROM "${t.name}" WHERE USER_ID = ? GROUP BY DEVICE_ID ORDER BY DEVICE_ID`).all(participantId);
+        expect(counts[t.name].map(({ device, count }) => ({ device, count }))).toEqual(inDb.map((r) => ({ ...r })));
+      }
       // only their own devices, and never the band's identifier
       const devices = (await client.get<{ devices: Record<string, unknown>[] }>("/api/data/devices")).body.devices;
       const own = raw.prepare("SELECT id FROM device WHERE participant_id = ? ORDER BY id").all(participantId) as { id: number }[];
@@ -89,6 +95,13 @@ describe.each(CASES)("isolation between participants ($app)", ({ app, codes }) =
       const forged = await download(me.client, table, `&${param}=${other.participantId}`);
       expect(forged.rows).toEqual(plain.rows);
     }
+    // only rows of the asked device; another participant's device gives nothing
+    const myDevice = (await me.client.get<{ devices: { id: number }[] }>("/api/data/devices")).body.devices[0].id;
+    const theirDevice = (await other.client.get<{ devices: { id: number }[] }>("/api/data/devices")).body.devices[0].id;
+    const one = (await me.client.get<Page>(`/api/data/table/${table}?device=${myDevice}&limit=20000`)).body;
+    expect(one.rows.every((r) => r[one.columns.indexOf("DEVICE_ID")] === myDevice)).toBe(true);
+    expect((await me.client.get<Page>(`/api/data/table/${table}?device=${theirDevice}`)).body.rows).toEqual([]);
+    expect((await me.client.get(`/api/data/table/${table}?device=abc`)).status).toBe(400);
     // a forged header or body does not change who is asking either
     const viaHeader = await me.client.req<Page>("GET", `/api/data/table/${table}?limit=5`, undefined, { "x-user-id": String(other.participantId), "x-participant-id": String(other.participantId) });
     expect(viaHeader.body.rows).toEqual(plain.rows.slice(0, 5));
@@ -109,7 +122,7 @@ describe.each(CASES)("isolation between participants ($app)", ({ app, codes }) =
     const { admin, participants } = await participantClients(s, codes.slice(0, 1));
     const p = participants.get(codes[0])!.client;
     const anon = s.client();
-    const dataPaths = ["/api/data/tables", "/api/data/devices", `/api/data/table/${DATASETS[app].dataTables[0].name}`];
+    const dataPaths = ["/api/data/tables", "/api/data/devices", "/api/data/counts", "/api/me/settings", `/api/data/table/${DATASETS[app].dataTables[0].name}`];
     for (const path of dataPaths) {
       expect((await admin.get(path)).status).toBe(403);
       expect((await anon.get(path)).status).toBe(401);

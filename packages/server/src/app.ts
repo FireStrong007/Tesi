@@ -13,6 +13,7 @@ import { bodyLimit } from "hono/body-limit";
 import { compress } from "hono/compress";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { DATASETS } from "@bridge/core/datasets";
+import { checkGoals } from "@bridge/core/goals";
 import { STUDY_TIME_ZONE } from "@bridge/core/time-zone";
 import type { Config } from "./config";
 import { NoDataError, type DataSource } from "./data-source";
@@ -20,7 +21,7 @@ import type { LoginLimiter } from "./auth/limiter";
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from "./auth/passwords";
 import { USERNAME_RE, normalizeUsername, sameToken, type Account, type AuthStore, type Role, type Session } from "./auth/store";
 import type { Logger } from "./log";
-import { BadRequest, devicesOf, participantCode, participantExists, participantsOverview, readRows, tableInfos } from "./participant-data";
+import { BadRequest, countsOf, devicesOf, participantCode, participantExists, participantsOverview, readRows, tableInfos } from "./participant-data";
 
 export interface AppDeps {
   config: Config;
@@ -44,7 +45,8 @@ class HttpError extends Error {
   }
 }
 
-const publicAccount = (a: Account) => ({ username: a.username, role: a.role, mustChangePassword: a.mustChangePassword });
+// participantId: the participant's own id, which their rows carry in USER_ID (never taken back from the client)
+const publicAccount = (a: Account) => ({ username: a.username, role: a.role, mustChangePassword: a.mustChangePassword, ...(a.role === "participant" ? { participantId: a.participantId } : {}) });
 
 /** the administrator's view of an account */
 const adminAccount = (a: Account) => ({
@@ -258,8 +260,33 @@ export function createApp(deps: AppDeps) {
     if (!info) throw new HttpError(404, "Tabella non disponibile.", "no_table");
     const since = c.req.query("since");
     const limit = c.req.query("limit");
-    const page = readRows(snap.db, info, pid(c), { since: since == null ? undefined : Number(since), after: c.req.query("after") || undefined, limit: limit == null ? undefined : Number(limit) });
+    const device = c.req.query("device");
+    const page = readRows(snap.db, info, pid(c), {
+      device: device == null ? undefined : Number(device),
+      since: since == null ? undefined : Number(since),
+      after: c.req.query("after") || undefined,
+      limit: limit == null ? undefined : Number(limit),
+    });
     return c.json({ ...page, dataVersion: snap.version, dataTakenAt: snap.takenAt });
+  });
+
+  // rows per table and device, to check the browser's copy
+  app.get("/api/data/counts", participant, (c) => {
+    const snap = snapshot();
+    return c.json({ counts: countsOf(snap.db, ds, pid(c)), dataVersion: snap.version, dataTakenAt: snap.takenAt });
+  });
+
+  // ------------------------------------------------------------ participant: goals
+
+  app.get("/api/me/settings", participant, (c) => c.json({ goals: auth.goals(session(c).account.id) }));
+
+  app.post("/api/me/settings", participant, async (c) => {
+    const b = await body<{ goals: unknown }>(c);
+    const account = session(c).account;
+    const checked = checkGoals(b.goals, auth.goals(account.id));
+    if ("error" in checked) throw new HttpError(400, checked.error, "bad_goals");
+    auth.setGoals(account.id, checked.goals);
+    return c.json({ goals: checked.goals });
   });
 
   // «Sincronizza»: a newer copy only if the one in use is older than SYNC_REFRESH_MIN_AGE_MIN
