@@ -7,11 +7,10 @@
  */
 import { addDays, startOfDay } from "../db/queries";
 import type { SqlExecutor } from "../db/sql";
-import { MIN_VALID_DAYS } from "../metrics";
 import { loadRange } from "../range-data";
-import type { PeriodStanding } from "./aggregate";
+import type { ComparableStanding } from "./aggregate";
 import { CohortSource, daysOf } from "./cohort";
-import { factsFromRange, metricValue, periodValue, type DayFacts } from "./daily-values";
+import { factsFromRange, metricValue, type DayFacts } from "./daily-values";
 import type { CompareMetric, ComparisonQuery } from "./types";
 
 export interface PersonFacts {
@@ -70,13 +69,11 @@ export class FactsComparisonSource extends CohortSource {
   }
 
   /**
-   * Where `key` stands among the others for [from, to): their period value computed here from the
-   * same facts as the others' (not sent by the client), and the standing among the others.
+   * Where `key` stands among the others for [from, to), over the comparable days only
+   * (CohortSource.comparableStanding): their own values come from the same facts as the others'
+   * (never sent by the client).
    */
-  async standingOf(metric: CompareMetric, from: number, to: number, key: string): Promise<PeriodStanding & { mine: { value: number | null; days: number } }> {
-    const days = daysOf(from, to);
-    const mine = periodValue(metric, days, this.valuesFor(key, metric, days), this.now());
-    const standing = await this.periodStanding(metric, from, to, mine.days >= MIN_VALID_DAYS ? mine.value : null, { excludeUserId: key });
-    return { ...standing, mine };
+  async standingOf(metric: CompareMetric, from: number, to: number, key: string): Promise<ComparableStanding> {
+    return this.comparableStanding(metric, from, to, this.valuesFor(key, metric, daysOf(from, to)), { excludeUserId: key });
   }
 }

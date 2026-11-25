@@ -42,6 +42,12 @@ export const fmtWeekday = (ts: number) => new Date(ts * 1000).toLocaleDateString
 export const fmtDayNum = (ts: number) => String(localParts(ts).day);
 /** "27 ott" */
 export const fmtDayMonth = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, day: "numeric", month: "short" });
+/** a range of days, last day included: "16–22 nov" within a month, "26 ott – 1 nov" across two */
+export const fmtDayRange = (from: number, last: number) => {
+  const a = localParts(from);
+  const b = localParts(last);
+  return a.month === b.month && a.year === b.year ? `${a.day}–${fmtDayMonth(last)}` : `${fmtDayMonth(from)} – ${fmtDayMonth(last)}`;
+};
 /** "Novembre", with the year when it is not the current one ("Dicembre 2025") */
 export const fmtMonth = (ts: number) => {
   const sameYear = localParts(ts).year === localParts(Date.now() / 1000).year;

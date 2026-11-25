@@ -276,6 +276,16 @@ function InfoPanel({ items, message }: InfoContent) {
   );
 }
 
+/** about the width of one character of a 10px bar label */
+const LABEL_CHAR_PX = 5.6;
+/** a label on two lines: after " – " or before its last word */
+const twoLines = (label: string): [string, string] => {
+  const dash = label.indexOf(" – ");
+  if (dash >= 0) return [label.slice(0, dash + 2), label.slice(dash + 3)];
+  const space = label.lastIndexOf(" ");
+  return space > 0 ? [label.slice(0, space), label.slice(space + 1)] : [label, ""];
+};
+
 /** the smallest of 1, 2, 3, 5, 7, 10 bars between two labels that leaves `gap` px between them */
 const labelStep = (bw: number, gap: number) => [1, 2, 3, 5, 7, 10].find((k) => k * bw >= gap) ?? 10;
 
@@ -303,6 +313,7 @@ export function BarChart({
   sideLabels = false,
   tightY = false,
   minLabelGap = 0,
+  twoLineLabels = false,
   info,
   infoDefault,
 }: {
@@ -327,6 +338,8 @@ export function BarChart({
   tightY?: boolean;
   /** thin out the day labels so that they are at least this many px apart */
   minLabelGap?: number;
+  /** labels too wide for their bar are written on two lines ("26 ott –" / "1 nov", "16–22" / "nov") */
+  twoLineLabels?: boolean;
   /** a panel under the chart for the bar under the pointer (or the last one pointed at), instead of the tooltip */
   info?: (i: number) => InfoContent;
   /** bar shown in the panel before any is pointed at */
@@ -335,12 +348,14 @@ export function BarChart({
   const [ref, { width: w }] = useSize<HTMLDivElement>();
   const padL = 40;
   const padR = sideLabels ? 58 : 0;
-  const padB = 22;
   const padT = 8;
   const plotW = Math.max(1, w - padL - padR);
   const plotR = padL + plotW;
-  const plotH = height - padB - padT;
   const bw = plotW / Math.max(items.length, 1);
+  // labels too wide for their bar go on two lines, all of them (twoLineLabels)
+  const split = twoLineLabels && items.some((it) => it.label.length * LABEL_CHAR_PX > bw - 4);
+  const padB = split ? 34 : 22;
+  const plotH = height - padB - padT;
   const indexAt = (px: number) => {
     const i = Math.floor((px - padL) / bw);
     return i >= 0 && i < items.length && !items[i].future ? i : null;
@@ -459,8 +474,17 @@ export function BarChart({
                   </text>
                 )}
                 {(i % every === 0 || isSel) && (
-                  <text x={padL + i * bw + bw / 2} y={height - 6} textAnchor="middle" className={cn("text-[10px]", isSel ? "fill-foreground font-semibold" : "fill-muted-foreground")}>
-                    {it.label}
+                  <text x={padL + i * bw + bw / 2} y={height - (split ? 18 : 6)} textAnchor="middle" className={cn("text-[10px]", isSel ? "fill-foreground font-semibold" : "fill-muted-foreground")}>
+                    {split ? (
+                      <>
+                        {twoLines(it.label)[0]}
+                        <tspan x={padL + i * bw + bw / 2} dy={12}>
+                          {twoLines(it.label)[1]}
+                        </tspan>
+                      </>
+                    ) : (
+                      it.label
+                    )}
                   </text>
                 )}
               </g>

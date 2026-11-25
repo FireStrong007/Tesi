@@ -85,6 +85,19 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 - **Nell'app:** «Confronta» è di nuovo visibile, resta uno stato della pagina; nel pannello sotto il grafico «Partecipante tipico (mediana)», «Metà dei partecipanti», «Media (n = …)». Senza connessione: «Il confronto richiede la connessione.»
 - **Corretto:** in sviluppo (StrictMode di React) si creavano due worker SQLite sulla stessa copia OPFS, con errori in console; ora c'è un solo client per pagina (`sharedDbClient`).
 
+### Dopo la prova con SYN-G01 (25 novembre)
+- **Confronto solo dall'1 al 3 e dal 22 al 24 novembre, mai sonno e SpO2:** non era né il generatore né il calcolo. Il file provato, `data/synthetic-garmin.db` del 24 novembre, aveva solo gli 8 partecipanti predefiniti (`--cohort` è arrivato con la Fase 4).
+  - Esclusa SYN-G01, gli altri con dati erano 5 dall'1 al 3 (SYN-G05 finisce il 3) e dal 22 al 24 (SYN-G08 ha solo gli ultimi 3 giorni), 4 negli altri giorni: sotto la soglia. Sonno 2–3, SpO2 2–3: mai 5.
+  - Per ogni giorno e metrica, i partecipanti con dati, quelli con giorno valido e l'n dell'API coincidono, sia su quel file sia su quello con `--cohort 100`.
+  - Con `--cohort 100` il confronto c'è in tutti i giorni di novembre: n tra 104 e 105 per passi, calorie, battito, stress, Body Battery, respirazione; tra 102 e 103 per il sonno; tra 84 e 85 per la SpO2.
+  - La coorte ha dati in ogni ora fino all'ora della generazione, una notte per ogni giorno, la SpO2 per circa l'80% e nessuna HRV (il vívosmart 5 non la misura).
+  - `npm run gen:synthetic` ora dice quanti partecipanti ha scritto e fino a quando arrivano i dati, e senza coorte ricorda di usare `-- --cohort 100` per il confronto.
+  - `data/synthetic-garmin.db` è stato rigenerato il 25 novembre con `--cohort 100` (108 partecipanti, 175 MB).
+- **Nessun altro con dati:** se nessun altro partecipante ha dati per una metrica nel periodo, la frase dice «Nessun altro partecipante ha dati sul sonno in questo periodo»; nel pannello di un giorno, «… in questo giorno». Se gli altri ci sono ma sono pochi resta «Non ci sono abbastanza partecipanti… (N con dati, ne servono M)». La legenda della fascia compare solo se la fascia è disegnata.
+- **Intensità per settimana:** le etichette sono l'intervallo («26 ott – 1 nov», «2–8 nov»), su due righe quando non entrano.
+- **Frase di riepilogo:** usa solo i giorni conclusi (le settimane complete, per l'intensità) in cui il confronto esiste, sia per il partecipante sia per gli altri, e lo dice: «Novembre, su 24 giorni confrontabili: … Fai più passi di circa 40 partecipanti su 100 (mediana degli altri …)». Il verbo cambia con la metrica: dormi più a lungo, bruci più calorie attive, hai il battito a riposo più alto, respiri più spesso, hai più minuti di intensità, …
+- **Test:** coorte continua fino all'ora della generazione (synth); in ogni giorno n = altri partecipanti con dati, sonno e SpO2 compresi; «nessun altro partecipante»; giorni e settimane confrontabili (core e server).
+
 ### Tempi e memoria della ricostruzione della cache (`npm run measure:compare -- <database>`)
 | | dati reali (`data/gadgetbridge.db`: 7 partecipanti, 855 giorni-persona) | sintetici `--cohort 100` (108 partecipanti, 3.071 giorni-persona) |
 |---|---|---|
@@ -123,7 +136,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 
 ### Dati per lo sviluppo
 - `data/gadgetbridge.db` e `data/GimaDB.db`: copie reali, mai in git, aperte solo in sola lettura.
-- `npm run gen:synthetic` crea `data/synthetic-garmin.db` (8 partecipanti) e `data/synthetic-gima.db` (6), con gli schemi reali e alcune sezioni volutamente vuote. Con `-- --cohort N` si aggiungono N partecipanti Garmin con profili diversi (`SYN-C001`…), utili per provare il confronto.
+- `npm run gen:synthetic` crea `data/synthetic-garmin.db` (8 partecipanti) e `data/synthetic-gima.db` (6), con gli schemi reali e alcune sezioni volutamente vuote. Con `-- --cohort N` si aggiungono N partecipanti Garmin con profili diversi (`SYN-C001`…): **servono per provare il confronto**, perché con i soli 8 predefiniti quasi tutti i giorni hanno meno di 5 altri partecipanti. Quello in `data/` oggi ha `--cohort 100`.
 - Per provare: copia `.env.example` in `.env`, imposta `ADMIN_PASSWORD`, poi `npm run dev`.
 
 ## Decisioni prese
@@ -140,6 +153,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 - **Distanza (regola B, 25 novembre):** si stima solo dove i passi non hanno nessuna distanza misurata dopo di loro nello stesso giorno: passi × passo medio della persona. Il passo medio si calcola dai suoi minuti coperti dalla distanza, se sono almeno 60 minuti e 1.000 passi; altrimenti vale il **valore predefinito di 75 cm**. Nell'interfaccia è indicata come «stimata» o «in parte stimata». È la stessa regola per tutti, anche nel confronto, perché sta nelle query di core.
 - **Sincronizzazione:** finestra di 3 giorni per tabella e per dispositivo, conteggi confrontati a ogni sincronizzazione (24 novembre).
 - **Confronto (Fase 4, 25 novembre):** parole «partecipante tipico (mediana)», «metà dei partecipanti», «media (n = …)»; il giorno in corso è escluso dal valore del periodo fino a mezzanotte; «Confronta» resta uno stato della pagina; il calcolo è sul server, con la cache precedente usata finché la nuova non è pronta.
+- **Frase di riepilogo (25 novembre):** solo sui giorni (settimane) confrontabili, detto nella frase; «Hai più minuti di circa 40 partecipanti su 100» con il verbo della metrica; messaggio esplicito quando nessun altro ha dati.
 
 ### Lavoro precedente (ancora valide)
 - **Mezzanotte nel formato del server:** si mantiene il comportamento di Gadgetbridge (i totali di mezzanotte possono essere sovrascritti dal file successivo).

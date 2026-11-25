@@ -46,10 +46,10 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useQuery } from "@/hooks/use-query";
 import {
   NOT_ENOUGH_PARTICIPANTS,
+  noOthersMessage,
   WEEKLY_METRICS,
   COMPARE_AVAILABLE,
   getComparisonSource,
-  periodValue,
   summarySentence,
   userDailyValues,
   weeklyTotal,
@@ -61,7 +61,7 @@ import {
 import { ApiError } from "@/lib/api";
 import { loadDay, type DayData } from "@bridge/core/day-data";
 import { addDays, sleepTotal, startOfDay } from "@bridge/core/db/queries";
-import { estimatedLabel, fmtDay, fmtDayLong, fmtDayMonth, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
+import { estimatedLabel, fmtDay, fmtDayLong, fmtDayMonth, fmtDayRange, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
 import { STRESS_LEVELS, STRESS_MIN_VALID, getValidDayHours, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@bridge/core/metrics";
 import { loadRange, type DayAgg, type RangeData } from "@bridge/core/range-data";
 import { navigate, query, usePath } from "@/lib/router";
@@ -696,6 +696,8 @@ function RangeView({
     tightY: true,
     onSelect: (k: string | number) => onOpenDay(Number(k), weekly ? "week" : "day"),
     showValues: period === "week" || weekly,
+    // week intervals ("26 ott – 1 nov") go on two lines when they do not fit their bar
+    twoLineLabels: weekly,
     height: 260,
   };
   const title = period === "month" ? fmtMonth(range.from) : `${fmtDay(from)} – ${fmtDay(addDaysLocal(to, -1))}`;
@@ -720,7 +722,6 @@ function RangeView({
   const mineRange = active ? r : null;
   const now = Math.floor(Date.now() / 1000);
   const mineDaily = useMemo(() => (mineRange && cfg ? userDailyValues(cfg.metric, mineRange) : null), [mineRange, cfg]);
-  const minePeriod = mineDaily && cfg && mineRange ? periodValue(cfg.metric, mineRange.days, mineDaily, now) : null;
   // the standing and the participant's own period value both come from the server's data
   const { data: standing } = useQuery<ServerStanding | null>(
     () => (active && cfg && source ? source.periodStanding(cfg.metric, from, to) : Promise.resolve(null)),
@@ -751,17 +752,13 @@ function RangeView({
   const mine = active && mineDaily ? (weeks ? weeks.map((w) => weeklyTotal(r.days, mineDaily, w, now)) : mineDaily) : null;
   const others = dist?.length === view.items.length ? dist.map((d, i) => (items[i].partial || items[i].future ? { ...d, median: null, p25: null, p75: null } : d)) : null;
   const cmp =
-    active && cfg && mine && minePeriod
+    active && cfg && mine
       ? comparisonView(cfg, {
           dist: others,
           standing: standing ?? null,
-          minePeriod,
           error: compareError,
-          span: weeks
-            ? `${fmtMonth(range.from)}, ${weeks.filter((w) => w.end <= startOfDay(now)).length} settimane complete`
-            : period === "month"
-              ? fmtMonth(range.from)
-              : PERIOD_SPAN[period],
+          // the sentence itself says how many days (weeks) of the period could be compared
+          span: period === "month" ? fmtMonth(range.from) : PERIOD_SPAN[period],
         })
       : null;
   const info =
@@ -797,7 +794,8 @@ function RangeView({
         {view.legend && <Legend items={view.legend} />}
         {cmp && (
           <div className="space-y-1.5 border-t pt-3">
-            <Legend items={[cmp.legend]} />
+            {/* the band's legend only where a band is drawn */}
+            {cmp.overlay?.values.some((v) => v != null) && <Legend items={[cmp.legend]} />}
             <p className="text-sm">{cmp.summary}</p>
             {source?.sample && <p className="text-muted-foreground text-[11px]">dati di confronto di esempio</p>}
           </div>
@@ -914,19 +912,20 @@ function compareInfo(
     { label: enough ? `Media (n = ${others.n})` : "Media", value: loading ? "…" : enough && others.mean != null ? cfg.fmt(others.mean) : "–" },
   ],
   // fewer than the minimum of others with data that day (a.minParticipants, from the server)
-  ...(!loading && !enough ? { message: `${NOT_ENOUGH_PARTICIPANTS}${others?.n ? ` (${others.n} con dati, ne servono ${a.minParticipants})` : ""}.` } : {}) };
+  ...(!loading && !enough
+    ? { message: others?.n ? `${NOT_ENOUGH_PARTICIPANTS} (${others.n} con dati, ne servono ${a.minParticipants}).` : `${noOthersMessage(cfg.metric, a.weekly ? "settimana" : "giorno")}.` }
+    : {}) };
 }
 
 /**
  * Overlay, legend entry and summary line of the comparison (dist / standing null = still loading).
- * `minePeriod` is the user's value for the whole period and their valid days.
+ * The summary line comes from the server's standing, over the period's comparable days.
  */
 function comparisonView(
   cfg: CompareConfig,
   a: {
     dist: DailyDistribution[] | null;
     standing: ServerStanding | null;
-    minePeriod: { value: number | null; days: number };
     span: string;
     error: Error | null;
   },
@@ -948,7 +947,7 @@ function comparisonView(
     legend,
     summary: standing
       ? // the participant's own value as the server computed it, from the same data as the others'
-        summarySentence({ span: a.span, mine: standing.mine.value, myDays: standing.mine.days, standing, text: cfg.text, fmt: cfg.fmt })
+        summarySentence({ metric: cfg.metric, span: a.span, standing, text: cfg.text, fmt: cfg.fmt })
       : "Caricamento del confronto…",
     top: highs.length ? Math.max(...highs) : null,
   };
@@ -1295,14 +1294,13 @@ function buildRange(tab: MetricId, r: RangeData, user: Person, labelOf: (d: numb
             const vigorous = inWeek.reduce((s, x) => s + x.vigorous, 0);
             return {
               key: w.start,
-              label: fmtDayMonth(w.start),
+              // the interval, so that a month starting with the previous month's days reads right
+              label: fmtDayRange(w.start, addDaysLocal(w.end, -1)),
               value: intensityScore(moderate, vigorous),
               segments: [
                 { value: moderate, color: "var(--steps)" },
                 { value: 2 * vigorous, color: "var(--calories)" },
               ],
-              // comparing: the panel under the chart already names the week
-              details: opts.compare ? undefined : [{ text: `${fmtDay(w.start)} – ${fmtDay(addDaysLocal(w.end, -1))}`, sub: true }],
             };
           }),
           goal: weeklyGoal,

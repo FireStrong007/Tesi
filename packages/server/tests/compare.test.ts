@@ -8,13 +8,16 @@ import { copyFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { DailyDistribution } from "@bridge/core/comparison/types";
+import { summarySentence, type ComparableStanding } from "@bridge/core/comparison/aggregate";
+import { metricValue, weeksCovering } from "@bridge/core/comparison/daily-values";
+import type { CompareMetric, DailyDistribution } from "@bridge/core/comparison/types";
 import { DEFAULT_VALID_DAY_HOURS, setValidDayHours } from "@bridge/core/metrics";
 import { ServerComparisonSource } from "@bridge/core/server/server-source";
 import { addDays, startOfDay } from "@bridge/core/time-zone";
 import { buildFacts, type BuildResult } from "../src/comparison/build";
 import type { DataSource } from "../src/data-source";
 import { executor } from "../src/sqlite";
+import { writeGarminDb } from "@bridge/synth/garmin-db";
 import { ADMIN, NOW, participantClients, syntheticDb, tempDir, testServer, type Client } from "./helpers";
 
 const dir = tempDir();
@@ -112,6 +115,83 @@ describe("comparison with the other participants", () => {
     expect(res.body.minParticipants).toBe(50);
     expect(res.body.days.every((d) => d.median == null && d.mean == null && d.p25 == null && d.n < 50)).toBe(true);
     await expect(testServer({ dir, dataFile: file, env: { COMPARE_MIN_PARTICIPANTS: "3" } })).rejects.toThrow(/COMPARE_MIN_PARTICIPANTS/);
+  });
+});
+
+describe("which days can be compared", () => {
+  const standingOf = (c: Client, metric: string, f: number, t: number) => c.get<{ standing: ComparableStanding }>(`/api/compare/standing?metric=${metric}&from=${f}&to=${t}`);
+
+  it("with a cohort every day up to today has the comparison, sleep and SpO2 included; n = the others with data", async () => {
+    const file = syntheticDb("vitabridge", dir, 3, COHORT);
+    const s = await testServer({ dir, dataFile: file });
+    const { participants } = await participantClients(s, ["SYN-G01"]);
+    const me = participants.get("SYN-G01")!.client;
+    const ref = await direct(file);
+    const others = ref.people.filter((p) => p.key !== "SYN-G01");
+    for (const metric of ["steps", "calories", "resting_hr", "stress", "body_battery", "respiration", "sleep", "spo2"] as const) {
+      const res = (await days(me, metric)).body.days;
+      res.forEach((d, i) => {
+        // n is exactly the other participants with a value that day (valid day for day totals)
+        const withValue = others.filter((p) => metricValue(metric, p.facts[p.days.indexOf(d.day)] ?? null) != null).length;
+        expect(d.n, `${metric} ${i}`).toBe(withValue);
+        expect(d.median, `${metric} ${i}`).not.toBeNull();
+      });
+    }
+    // the cohort's personas: everyone sleeps, SpO2 for a part of them
+    const cohort = ref.people.filter((p) => p.key.startsWith("SYN-C"));
+    expect(cohort).toHaveLength(COHORT);
+    const has = (m: CompareMetric) => cohort.filter((p) => p.facts.some((f) => metricValue(m, f) != null)).length;
+    expect(has("sleep")).toBe(COHORT);
+    expect(has("spo2")).toBeGreaterThan(0);
+    expect(has("spo2")).toBeLessThan(COHORT);
+    // every cohort member has a valid day on every day up to yesterday
+    for (const p of cohort) for (let d = from; d < today; d = addDays(d, 1)) expect(metricValue("steps", p.facts[p.days.indexOf(d)] ?? null), p.key).not.toBeNull();
+  });
+
+  it("says when no other participant has data for a metric", async () => {
+    // six participants, nobody but SYN-G01 with sleep
+    const file = join(dir, "nobody-sleeps.db");
+    const noSleep = ["GARMIN_SLEEP_STAGE_SAMPLE", "GARMIN_SLEEP_STATS_SAMPLE", "GARMIN_EVENT_SAMPLE"] as const;
+    writeGarminDb(file, { now: NOW, participants: [{ code: "SYN-G01", seed: 101, days: 10 }, ...[1, 2, 3, 4, 5].map((k) => ({ code: `SYN-N0${k}`, seed: 200 + k, days: 10, omit: [...noSleep] }))] });
+    const s = await testServer({ dir, dataFile: file });
+    const { participants } = await participantClients(s, ["SYN-G01"]);
+    const c = participants.get("SYN-G01")!.client;
+    const f = addDays(today, -9);
+    const res = (await c.get<{ days: DailyDistribution[] }>(`/api/compare/daily?metric=sleep&from=${f}&to=${to}`)).body.days;
+    expect(res.every((d) => d.n === 0 && d.median == null)).toBe(true);
+    const st = (await standingOf(c, "sleep", f, to)).body.standing;
+    expect(st).toMatchObject({ noOthers: true, comparable: { count: 0, unit: "day" }, median: null, percentile: null });
+    expect(st.mine.value).toBeNull(); // no comparable day: their own sleep is not judged
+    expect(summarySentence({ metric: "sleep", span: "Novembre", standing: st, text: String, fmt: String })).toBe("Nessun altro partecipante ha dati sul sonno in questo periodo");
+    // steps: the others have them
+    expect((await standingOf(c, "steps", f, to)).body.standing).toMatchObject({ noOthers: false, comparable: { count: 9 } });
+  });
+
+  it("the summary uses only the days (weeks) where the others' distribution exists, for the participant too", async () => {
+    // the default participants alone: on most days fewer than 5 others have data
+    const file = syntheticDb("vitabridge", dir);
+    const s = await testServer({ dir, dataFile: file });
+    const { participants } = await participantClients(s, ["SYN-G01"]);
+    const c = participants.get("SYN-G01")!.client;
+    const f = addDays(today, -35);
+    const daily = (await c.get<{ days: DailyDistribution[] }>(`/api/compare/daily?metric=steps&from=${f}&to=${to}`)).body.days;
+    const comparable = daily.filter((d) => d.median != null && d.day < today).map((d) => d.day);
+    expect(comparable.length).toBeGreaterThan(0);
+    expect(comparable.length).toBeLessThan(daily.length - 1); // not all of them: that is the point
+    const st = (await standingOf(c, "steps", f, to)).body.standing;
+    expect(st.comparable).toEqual({ count: comparable.length, unit: "day" });
+    const mine = (await direct(file)).people.find((p) => p.key === "SYN-G01")!;
+    const values = comparable.map((d) => metricValue("steps", mine.facts[mine.days.indexOf(d)] ?? null)).filter((v): v is number => v != null);
+    expect(st.mine.days).toBe(values.length);
+    expect(st.mine.value).toBeCloseTo(values.reduce((a, b) => a + b, 0) / values.length, 6);
+    // weekly: the complete weeks where the weekly distribution exists
+    const ws = weeksCovering(f, to);
+    const wf = ws[0].start;
+    const wt = ws[ws.length - 1].end;
+    const weeks = (await c.get<{ weeks: DailyDistribution[] }>(`/api/compare/weekly?metric=intensity&from=${wf}&to=${wt}`)).body.weeks;
+    const wst = (await standingOf(c, "intensity", wf, wt)).body.standing;
+    expect(wst.comparable).toEqual({ count: weeks.filter((w) => w.median != null && addDays(w.day, 7) <= today).length, unit: "week" });
+    expect(wst.comparable.count).toBeLessThan(weeks.length);
   });
 });
 

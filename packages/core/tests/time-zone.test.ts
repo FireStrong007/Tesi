@@ -3,7 +3,7 @@
  * device or of the process: this file also runs with TZ=America/New_York (vitest.other-tz.config.ts).
  */
 import { describe, expect, it } from "vitest";
-import { fmtDateTime, fmtDayMonth, fmtTime } from "../src/format";
+import { fmtDateTime, fmtDayMonth, fmtDayRange, fmtTime } from "../src/format";
 import { STUDY_TIME_ZONE, addDays, dayKey, fromDayKey, localParts, monthStart, startOfDay, weekStart, zonedTime } from "../src/time-zone";
 
 const utc = (y: number, m: number, d: number, h = 0, mi = 0) => Date.UTC(y, m - 1, d, h, mi) / 1000;
@@ -43,5 +43,8 @@ describe(`the study's calendar (${STUDY_TIME_ZONE}), process TZ=${process.env.TZ
     expect(fmtTime(t)).toBe("00:15");
     expect(fmtDayMonth(t)).toBe("24 nov");
     expect(fmtDateTime(t)).toContain("24 nov 2026");
+    // week intervals: the month once within a month, both across two
+    expect(fmtDayRange(zonedTime(2026, 11, 16), zonedTime(2026, 11, 22))).toBe("16–22 nov");
+    expect(fmtDayRange(zonedTime(2026, 10, 26), zonedTime(2026, 11, 1))).toBe("26 ott – 1 nov");
   });
 });

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { distributionOfUsers, MIN_USERS, positionOf, quantile, standingAmong, summarySentence, type PeriodStanding } from "../src/comparison/aggregate";
+import { distributionOfUsers, METRIC_WORDS, MIN_USERS, noOthersMessage, positionOf, quantile, rankSentence, standingAmong, summarySentence, type ComparableStanding } from "../src/comparison/aggregate";
+import { COMPARE_METRICS, type CompareMetric } from "../src/comparison/types";
 import { metricValue, periodValue, weeklyTotal, weeksCovering, type DayFacts } from "../src/comparison/daily-values";
 import { addDays, startOfDay } from "../src/db/queries";
 import { DEFAULT_VALID_DAY_HOURS, MIN_VALID_DAYS, getValidDayHours, isValidDay, setValidDayHours } from "../src/metrics";
@@ -66,29 +67,57 @@ describe("standing among the other users (between people)", () => {
 describe("summary line", () => {
   const fmt = (v: number) => String(Math.round(v));
   const text = (v: number) => `${fmt(v)} passi/giorno`;
-  const st = (percentile: number | null, median: number | null = 8667): PeriodStanding => ({ median, p25: 6000, p75: 11000, mean: median, n: 47, percentile });
-  const line = (mine: number | null, myDays: number, standing: PeriodStanding) => summarySentence({ span: "Ultimi 30 giorni", mine, myDays, standing, text, fmt });
+  const st = (percentile: number | null, mine: number | null, myDays: number, over: Partial<ComparableStanding> = {}): ComparableStanding => ({
+    median: 8667, p25: 6000, p75: 11000, mean: 8667, n: 47, percentile,
+    mine: { value: mine, days: myDays }, comparable: { count: 24, unit: "day" }, noOthers: false, ...over,
+  });
+  const line = (s: ComparableStanding, metric: CompareMetric = "steps") => summarySentence({ metric, span: "Novembre", standing: s, text, fmt });
 
-  it("judges between people with at least 7 valid days", () => {
+  it("judges between people over the comparable days, and says how many they are", () => {
     expect(MIN_VALID_DAYS).toBe(7);
-    expect(line(4120, 12, st(35.4))).toBe("Ultimi 30 giorni: 4120 passi/giorno, nella norma. Più di 35 partecipanti su 100 (mediana degli altri 8667)");
-    expect(line(2000, 12, st(8))).toBe("Ultimi 30 giorni: 2000 passi/giorno, sotto la norma. Più di 8 partecipanti su 100 (mediana degli altri 8667)");
-    expect(line(16000, 7, st(96))).toBe("Ultimi 30 giorni: 16000 passi/giorno, sopra la norma. Più di 96 partecipanti su 100 (mediana degli altri 8667)");
-    expect(line(1, 9, st(0))).toContain("sotto la norma. Meno di tutti gli altri partecipanti");
-    expect(line(1, 9, st(1))).toContain("Più di 1 partecipante su 100");
+    expect(line(st(35.4, 4120, 12))).toBe("Novembre, su 24 giorni confrontabili: 4120 passi/giorno, nella norma. Fai più passi di circa 35 partecipanti su 100 (mediana degli altri 8667)");
+    expect(line(st(8, 2000, 12))).toBe("Novembre, su 24 giorni confrontabili: 2000 passi/giorno, sotto la norma. Fai più passi di circa 8 partecipanti su 100 (mediana degli altri 8667)");
+    expect(line(st(96, 16000, 7))).toContain("sopra la norma. Fai più passi di circa 96 partecipanti su 100");
+    expect(line(st(0, 1, 9))).toContain("sotto la norma. Fai meno passi di tutti gli altri partecipanti");
+    expect(line(st(100, 1, 9))).toContain("Fai più passi di tutti gli altri partecipanti");
+    expect(line(st(1, 1, 9))).toContain("Fai più passi di circa 1 partecipante su 100");
+    expect(line(st(50, 9, 9, { comparable: { count: 1, unit: "day" } }))).toMatch(/^Novembre, su 1 giorno confrontabile: /);
+    expect(line(st(40, 250, 21, { comparable: { count: 3, unit: "week" } }), "intensity")).toBe(
+      "Novembre, su 3 settimane confrontabili: 250 passi/giorno, nella norma. Hai più minuti di intensità di circa 40 partecipanti su 100 (mediana degli altri 8667)",
+    );
+    expect(line(st(40, 250, 7, { comparable: { count: 1, unit: "week" } }), "intensity")).toMatch(/^Novembre, su 1 settimana confrontabile: /);
   });
 
-  it("asks for 7 valid days before judging, and never shows percentages", () => {
-    expect(line(3500, 5, st(20))).toBe("Ultimi 30 giorni: 3500 passi/giorno. Servono almeno 7 giorni di dati per il confronto (ne hai 5)");
-    expect(line(null, 0, st(null))).toBe("Ultimi 30 giorni: mediana degli altri 8667. Servono almeno 7 giorni di dati per il confronto (ne hai 0)");
+  it("each metric with its own verb", () => {
+    const rank = (m: CompareMetric) => line(st(40, 5, 10), m).split(". ")[1];
+    expect(rank("sleep")).toMatch(/^Dormi più a lungo di circa 40 partecipanti su 100/);
+    expect(rank("calories")).toMatch(/^Bruci più calorie attive di circa 40/);
+    expect(rank("resting_hr")).toMatch(/^Hai il battito a riposo più alto di circa 40/);
+    expect(rank("stress")).toMatch(/^Hai uno stress medio più alto di circa 40/);
+    expect(rank("body_battery")).toMatch(/^Hai una Body Battery massima più alta di circa 40/);
+    for (const m of COMPARE_METRICS) {
+      expect(rankSentence(m, 40)).toMatch(/ di circa 40 partecipanti su 100$/);
+      expect(rankSentence(m, 0)).toMatch(/ di tutti gli altri partecipanti$/);
+      expect(METRIC_WORDS[m].about).toMatch(/^su(i|l|lla|lle|llo) /);
+    }
+  });
+
+  it("asks for 7 valid days among the comparable ones before judging, and never shows percentages", () => {
+    expect(line(st(20, 3500, 5))).toBe("Novembre, su 24 giorni confrontabili: 3500 passi/giorno. Servono almeno 7 giorni con i tuoi dati tra quelli confrontabili (ne hai 5)");
+    expect(line(st(null, null, 0))).toBe("Novembre, su 24 giorni confrontabili: nessun tuo dato. Servono almeno 7 giorni con i tuoi dati tra quelli confrontabili (ne hai 0)");
     // a median of 0 (e.g. intensity minutes): no division, no percentage
-    const zero = line(30, 10, { median: 0, p25: 0, p75: 20, mean: 6, n: 40, percentile: 70 });
-    expect(zero).toBe("Ultimi 30 giorni: 30 passi/giorno, nella norma. Più di 70 partecipanti su 100 (mediana degli altri 0)");
+    const zero = line(st(70, 30, 10, { median: 0, p25: 0, p75: 20 }));
+    expect(zero).toContain("nella norma. Fai più passi di circa 70 partecipanti su 100 (mediana degli altri 0)");
     expect(zero).not.toMatch(/%|Infinity|NaN/);
   });
 
-  it("without enough other users says so", () => {
-    expect(line(5000, 20, { median: null, p25: null, p75: null, mean: null, n: 3, percentile: null })).toBe("Ultimi 30 giorni: 5000 passi/giorno. Non ci sono abbastanza partecipanti per un confronto");
+  it("without enough other participants, or without any, says so", () => {
+    expect(line(st(null, 5000, 20, { median: null, n: 3 }))).toBe("Novembre, su 24 giorni confrontabili: 5000 passi/giorno. Non ci sono abbastanza partecipanti per un confronto");
+    expect(line(st(null, 5000, 20, { median: null, n: 0, comparable: { count: 0, unit: "day" } }))).toBe("Novembre: Non ci sono abbastanza partecipanti per un confronto in nessun giorno del periodo");
+    expect(line(st(null, 5000, 20, { median: null, n: 0, comparable: { count: 0, unit: "week" } }))).toContain("in nessuna settimana del periodo");
+    expect(line(st(null, 400, 20, { median: null, n: 0, comparable: { count: 0, unit: "day" }, noOthers: true }), "sleep")).toBe("Nessun altro partecipante ha dati sul sonno in questo periodo");
+    expect(noOthersMessage("spo2", "giorno")).toBe("Nessun altro partecipante ha dati sulla SpO₂ in questo giorno");
+    expect(noOthersMessage("intensity", "settimana")).toBe("Nessun altro partecipante ha dati sui minuti di intensità in questa settimana");
   });
 });
 
@@ -133,6 +162,8 @@ describe("valid days and period values", () => {
     const src = new FactsComparisonSource([person("me", 3000), ...[4000, 5000, 6000, 7000, 8000].map((v, i) => person(`p${i}`, v))], () => nowTs);
     const st = await src.standingOf("steps", days[0], today, "me");
     expect(st.mine).toEqual({ value: 3000, days: 10 });
+    expect(st.comparable).toEqual({ count: 10, unit: "day" });
+    expect(st.noOthers).toBe(false);
     expect(st.n).toBe(5);
     expect(st.median).toBe(6000);
     expect(st.mean).toBe(6000);
@@ -144,6 +175,36 @@ describe("valid days and period values", () => {
     expect(four[0].n).toBe(5); // "me" is now among the others
     const strict = new FactsComparisonSource(src.people, () => nowTs, 6);
     expect((await strict.dailyDistribution("steps", days[0], today, { excludeUserId: "me" }))[0]).toMatchObject({ n: 5, median: null, mean: null });
+  });
+
+  it("the standing uses only the comparable days (and weeks): the same days for the participant and the others", async () => {
+    // 20 days; on the last 10 only 4 others have data: below the minimum, nothing to compare with
+    const days = Array.from({ length: 20 }, (_, i) => addDays(today, i - 20));
+    const person = (key: string, steps: (i: number) => number | null): PersonFacts => ({
+      key, id: 0, days, facts: days.map((_, i) => (steps(i) == null ? facts(0, 0) : facts(14, steps(i)!))),
+    });
+    const others = [4000, 5000, 6000, 7000].map((v, k) => person(`p${k}`, () => v));
+    const src = new FactsComparisonSource([person("me", (i) => (i < 10 ? 3000 : 9000)), ...others, person("p4", (i) => (i < 10 ? 8000 : null))], () => nowTs);
+    const daily = await src.dailyDistribution("steps", days[0], today, { excludeUserId: "me" });
+    expect(daily.map((d) => d.median != null)).toEqual(days.map((_, i) => i < 10));
+    const st = await src.standingOf("steps", days[0], today, "me");
+    // the participant's 9000 steps of the last 10 days are not counted: the others have no value there
+    expect(st.comparable).toEqual({ count: 10, unit: "day" });
+    expect(st.mine).toEqual({ value: 3000, days: 10 });
+    expect(st).toMatchObject({ n: 5, median: 6000, percentile: 0 });
+    expect(summarySentence({ metric: "steps", span: "Novembre", standing: st, text: String, fmt: String })).toMatch(/^Novembre, su 10 giorni confrontabili: 3000, sotto la norma\. Fai meno passi di tutti/);
+    // today is never comparable, even with everyone's data
+    const withToday = await src.standingOf("steps", days[0], addDays(today, 1), "me");
+    expect(withToday.comparable.count).toBe(10);
+    // a metric that no one else has
+    const spo2 = await src.standingOf("spo2", days[0], today, "me");
+    expect(spo2).toMatchObject({ noOthers: true, comparable: { count: 0 }, median: null });
+    // weekly metrics: complete weeks on which the weekly distribution exists
+    const weeks = weeksCovering(days[0], today).filter((w) => w.end <= today);
+    const wk = await src.standingOf("intensity", weeks[0].start, weeks[weeks.length - 1].end, "me");
+    expect(wk.comparable.unit).toBe("week");
+    const weekly = await src.weeklyDistribution("intensity", weeks[0].start, weeks[weeks.length - 1].end, { excludeUserId: "me" });
+    expect(wk.comparable.count).toBe(weekly.filter((w) => w.median != null && addDays(w.day, 7) <= today).length);
   });
 
   it("a period value is the mean of the valid days", () => {

@@ -1,4 +1,5 @@
 import { MIN_VALID_DAYS } from "../metrics";
+import type { CompareMetric } from "./types";
 
 /**
  * Below this many people nothing about the others is shown (too few people, and too revealing).
@@ -62,38 +63,79 @@ export const positionOf = (percentile: number): Position => (percentile < 25 ? "
 
 const POSITION_TEXT: Record<Position, string> = { below: "sotto la norma", within: "nella norma", above: "sopra la norma" };
 
-function shareText(percentile: number) {
+/**
+ * How each metric is said in the sentences of the comparison: "Fai più passi di circa 40
+ * partecipanti su 100", "Nessun altro partecipante ha dati sul sonno in questo periodo".
+ */
+export const METRIC_WORDS: Record<CompareMetric, { more: string; less: string; about: string }> = {
+  steps: { more: "Fai più passi", less: "Fai meno passi", about: "sui passi" },
+  calories: { more: "Bruci più calorie attive", less: "Bruci meno calorie attive", about: "sulle calorie attive" },
+  sleep: { more: "Dormi più a lungo", less: "Dormi meno", about: "sul sonno" },
+  resting_hr: { more: "Hai il battito a riposo più alto", less: "Hai il battito a riposo più basso", about: "sul battito a riposo" },
+  stress: { more: "Hai uno stress medio più alto", less: "Hai uno stress medio più basso", about: "sullo stress" },
+  body_battery: { more: "Hai una Body Battery massima più alta", less: "Hai una Body Battery massima più bassa", about: "sulla Body Battery" },
+  spo2: { more: "Hai una SpO₂ media più alta", less: "Hai una SpO₂ media più bassa", about: "sulla SpO₂" },
+  respiration: { more: "Respiri più spesso", less: "Respiri meno spesso", about: "sulla respirazione" },
+  hrv: { more: "Hai una HRV più alta", less: "Hai una HRV più bassa", about: "sulla HRV" },
+  intensity: { more: "Hai più minuti di intensità", less: "Hai meno minuti di intensità", about: "sui minuti di intensità" },
+};
+
+/** "Nessun altro partecipante ha dati sul sonno in questo periodo" (or day, week) */
+export function noOthersMessage(metric: CompareMetric, scope: "periodo" | "giorno" | "settimana"): string {
+  const where = scope === "settimana" ? "in questa settimana" : `in questo ${scope}`;
+  return `Nessun altro partecipante ha dati ${METRIC_WORDS[metric].about} ${where}`;
+}
+
+/** "Fai più passi di circa 40 partecipanti su 100" */
+export function rankSentence(metric: CompareMetric, percentile: number): string {
+  const w = METRIC_WORDS[metric];
   const p = Math.round(percentile);
-  if (p <= 0) return "Meno di tutti gli altri partecipanti";
-  if (p >= 100) return "Più di tutti gli altri partecipanti";
-  return `Più di ${p} ${p === 1 ? "partecipante" : "partecipanti"} su 100`;
+  if (p <= 0) return `${w.less} di tutti gli altri partecipanti`;
+  if (p >= 100) return `${w.more} di tutti gli altri partecipanti`;
+  return `${w.more} di circa ${p} ${p === 1 ? "partecipante" : "partecipanti"} su 100`;
+}
+
+/**
+ * The standing over the comparable part of a period: the days (weeks, for weekly metrics) already
+ * over on which the others' distribution exists (at least the minimum of other participants with
+ * data). The participant's value and the others' are computed over those days only.
+ */
+export interface ComparableStanding extends PeriodStanding {
+  /** the asking participant's value over the comparable days and their valid days among them */
+  mine: { value: number | null; days: number };
+  /** how many comparable days (or weeks) the period has */
+  comparable: { count: number; unit: "day" | "week" };
+  /** no other participant has any data for the metric in the period */
+  noOthers: boolean;
 }
 
 export interface SummaryInput {
-  /** e.g. "Ultimi 30 giorni" */
+  metric: CompareMetric;
+  /** e.g. "Novembre" */
   span: string;
-  /** the user's value for the period (mean of their valid days), null without data */
-  mine: number | null;
-  /** the user's valid days in the period */
-  myDays: number;
-  standing: PeriodStanding;
+  standing: ComparableStanding;
   /** a value with its unit / a bare value */
   text: (v: number) => string;
   fmt: (v: number) => string;
 }
 
+const comparableText = ({ count, unit }: ComparableStanding["comparable"]) =>
+  unit === "week" ? `${count} ${count === 1 ? "settimana confrontabile" : "settimane confrontabili"}` : `${count} ${count === 1 ? "giorno confrontabile" : "giorni confrontabili"}`;
+
 /**
- * The summary line under the chart. The judgement is between people: the user's period value
- * against the other participants' period values, e.g. "Ultimi 30 giorni: 4.120 passi/giorno, nella
- * norma. Più di 35 partecipanti su 100 (mediana degli altri 8.667)". It needs MIN_VALID_DAYS valid
- * days (today does not count until it is over: daily-values.periodValue).
+ * The summary line under the chart. The judgement is between people, over the comparable days
+ * only (ComparableStanding), and the line says how many they are, e.g. "Novembre, su 18 giorni
+ * confrontabili: 4.120 passi/giorno, nella norma. Fai più passi di circa 35 partecipanti su 100
+ * (mediana degli altri 8.667)". It needs MIN_VALID_DAYS valid days of the participant among the
+ * comparable ones (today does not count until it is over: daily-values.periodValue).
  */
-export function summarySentence({ span, mine, myDays, standing, text, fmt }: SummaryInput): string {
-  const others = standing.median != null ? `mediana degli altri ${fmt(standing.median)}` : null;
-  if (myDays < MIN_VALID_DAYS || mine == null) {
-    const head = mine != null ? text(mine) : others ?? "nessun dato";
-    return `${span}: ${head}. Servono almeno ${MIN_VALID_DAYS} giorni di dati per il confronto (ne hai ${myDays})`;
-  }
-  if (standing.percentile == null || !others) return `${span}: ${text(mine)}. ${NOT_ENOUGH_PARTICIPANTS}`;
-  return `${span}: ${text(mine)}, ${POSITION_TEXT[positionOf(standing.percentile)]}. ${shareText(standing.percentile)} (${others})`;
+export function summarySentence({ metric, span, standing, text, fmt }: SummaryInput): string {
+  const { mine, comparable } = standing;
+  if (standing.noOthers) return noOthersMessage(metric, "periodo");
+  if (comparable.count === 0) return `${span}: ${NOT_ENOUGH_PARTICIPANTS} in ${comparable.unit === "week" ? "nessuna settimana" : "nessun giorno"} del periodo`;
+  const head = `${span}, su ${comparableText(comparable)}`;
+  if (mine.days < MIN_VALID_DAYS || mine.value == null)
+    return `${head}: ${mine.value != null ? text(mine.value) : "nessun tuo dato"}. Servono almeno ${MIN_VALID_DAYS} giorni con i tuoi dati tra quelli confrontabili (ne hai ${mine.days})`;
+  if (standing.percentile == null || standing.median == null) return `${head}: ${text(mine.value)}. ${NOT_ENOUGH_PARTICIPANTS}`;
+  return `${head}: ${text(mine.value)}, ${POSITION_TEXT[positionOf(standing.percentile)]}. ${rankSentence(metric, standing.percentile)} (mediana degli altri ${fmt(standing.median)})`;
 }

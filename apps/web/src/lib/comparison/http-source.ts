@@ -4,11 +4,12 @@
  * left out by the server from the session; their own period value for the standing is computed
  * there too, from the same data and with the same rules as the others'.
  */
-import { MIN_USERS, type PeriodStanding } from "@bridge/core/comparison/aggregate";
+import { MIN_USERS, type ComparableStanding } from "@bridge/core/comparison/aggregate";
 import type { CompareMetric, ComparisonSource, DailyDistribution } from "@bridge/core/comparison/types";
 import { apiGet } from "@/lib/api";
 
-export type ServerStanding = PeriodStanding & { mine: { value: number | null; days: number } };
+/** the standing over the period's comparable days, with the participant's own value (aggregate.ComparableStanding) */
+export type ServerStanding = ComparableStanding;
 
 export class HttpComparisonSource implements ComparisonSource {
   readonly sample = false;

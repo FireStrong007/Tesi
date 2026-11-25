@@ -6,7 +6,7 @@ import { HttpComparisonSource } from "./http-source";
 
 export type { CompareMetric, ComparisonSource, DailyDistribution } from "@bridge/core/comparison/types";
 export type { PeriodStanding } from "@bridge/core/comparison/aggregate";
-export { MIN_USERS, NOT_ENOUGH_PARTICIPANTS, summarySentence } from "@bridge/core/comparison/aggregate";
+export { MIN_USERS, NOT_ENOUGH_PARTICIPANTS, noOthersMessage, summarySentence } from "@bridge/core/comparison/aggregate";
 export { WEEKLY_METRICS, periodValue, userDailyValues, weeklyTotal, weeksCovering } from "@bridge/core/comparison/daily-values";
 export type { ServerStanding } from "./http-source";
 
