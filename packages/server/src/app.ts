@@ -1,7 +1,10 @@
 /**
  * The HTTP API (Hono). Rules that hold for every route:
  *  - the participant is always the one of the session: no route takes a participant id from a
- *    participant (only administrators name a participant, to create their account);
+ *    participant (only administrators name a participant, by id AND code, to create or relink an
+ *    account);
+ *  - before any data, the account's id and code must still go together in the data copy in use
+ *    (auth/link.ts): otherwise no data, the account is «da verificare» and the audit log says so;
  *  - administrators never get health data, participants never get the administration;
  *  - requests that change something need the same Origin as PUBLIC_ORIGIN and, once logged in,
  *    the session's CSRF token in X-CSRF-Token;
@@ -17,13 +20,14 @@ import { COMPARE_METRICS, type CompareMetric } from "@bridge/core/comparison/typ
 import { checkGoals } from "@bridge/core/goals";
 import { STUDY_TIME_ZONE } from "@bridge/core/time-zone";
 import type { Config } from "./config";
-import { NoDataError, type DataSource } from "./data-source";
+import { NoDataError, type DataSnapshot, type DataSource } from "./data-source";
 import type { LoginLimiter } from "./auth/limiter";
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from "./auth/passwords";
+import { LINK_MESSAGES, checkLink, enforceLink, linkView, type Link } from "./auth/link";
 import { USERNAME_RE, normalizeUsername, sameToken, type Account, type AuthStore, type Role, type Session } from "./auth/store";
 import type { ComparisonService } from "./comparison/service";
 import type { Logger } from "./log";
-import { BadRequest, countsOf, devicesOf, participantCode, participantExists, participantsOverview, readRows, tableInfos } from "./participant-data";
+import { BadRequest, countsOf, devicesOf, participantCode, participantsOverview, readRows, tableInfos } from "./participant-data";
 
 export interface AppDeps {
   config: Config;
@@ -36,7 +40,14 @@ export interface AppDeps {
   now?: () => number;
 }
 
-type Env = { Variables: { session: Session | null } };
+type Env = {
+  Variables: {
+    session: Session | null;
+    /** set by `linked`: the data copy the account was checked on, and the participant it names */
+    snap: DataSnapshot;
+    who: { id: number; code: string };
+  };
+};
 type C = Context<Env>;
 
 class HttpError extends Error {
@@ -49,15 +60,28 @@ class HttpError extends Error {
   }
 }
 
-// participantId: the participant's own id, which their rows carry in USER_ID (never taken back from the client)
-const publicAccount = (a: Account) => ({ username: a.username, role: a.role, mustChangePassword: a.mustChangePassword, ...(a.role === "participant" ? { participantId: a.participantId } : {}) });
+// participantId and participantCode: the participant's own (their rows carry the id in USER_ID; never
+// taken back from the client); link: whether the account may show data now (auth/link.ts)
+const publicAccount = (a: Account, link: "ok" | "review" | "recreate") => ({
+  username: a.username,
+  role: a.role,
+  mustChangePassword: a.mustChangePassword,
+  ...(a.role === "participant" ? { participantId: a.participantId, participantCode: a.participantCode, link } : {}),
+});
 
-/** the administrator's view of an account */
-const adminAccount = (a: Account) => ({
+/**
+ * The administrator's view of an account; with its link to the data copy: «da verificare» with the
+ * id to relink it to, blocked (the code is gone), or «da ricreare».
+ */
+const adminAccount = (a: Account, link?: Link) => ({
   id: a.id,
   username: a.username,
   role: a.role,
   participantId: a.participantId,
+  participantCode: a.participantCode,
+  linkState: a.linkState,
+  problem: !link || link.state === "ok" ? null : link.state,
+  ...(link?.state === "relink" ? { relinkTo: link.participantId } : {}),
   disabled: a.disabled,
   mustChangePassword: a.mustChangePassword,
   createdAt: a.createdAt,
@@ -169,11 +193,25 @@ export function createApp(deps: AppDeps) {
     };
   const session = (c: C) => c.get("session")!;
 
+  /** the account's link to the data copy in use, kept up to date; without a copy yet, the stored state */
+  const linkNow = (a: Account): "ok" | "review" | "recreate" => {
+    if (a.role !== "participant") return "ok";
+    try {
+      return linkView(enforceLink(auth, data.current().db, a, log));
+    } catch (e) {
+      if (e instanceof NoDataError) return a.linkState;
+      throw e;
+    }
+  };
+
   // ------------------------------------------------------------ authentication
 
   // what the app needs to compute like the server: the study's time zone and the valid day rule
   const study = { timeZone: STUDY_TIME_ZONE, validDayHours: config.validDayHours };
-  const me = (c: C, s: { account: Account; csrfToken: string }) => c.json({ account: publicAccount(s.account), csrfToken: s.csrfToken, app: { id: ds.app, label: ds.label }, study });
+  // the data source, as a short fingerprint: the browser's copy belongs to it (another source wipes it)
+  const source = config.source.fingerprint.slice(0, 16);
+  const me = (c: C, s: { account: Account; csrfToken: string }) =>
+    c.json({ account: publicAccount(s.account, linkNow(s.account)), csrfToken: s.csrfToken, app: { id: ds.app, label: ds.label }, study, source });
 
   app.post("/api/auth/login", async (c) => {
     const b = await body<{ username: string; password: string }>(c);
@@ -220,7 +258,7 @@ export function createApp(deps: AppDeps) {
   // not logged in is an ordinary answer here (the login screen asks it at every start)
   app.get("/api/auth/me", (c) => {
     const s = c.get("session");
-    return s ? me(c, s) : c.json({ account: null, csrfToken: null, app: { id: ds.app, label: ds.label }, study });
+    return s ? me(c, s) : c.json({ account: null, csrfToken: null, app: { id: ds.app, label: ds.label }, study, source });
   });
 
   app.post("/api/auth/password", requireSession, async (c) => {
@@ -246,20 +284,36 @@ export function createApp(deps: AppDeps) {
   // ------------------------------------------------------------ participant: own data only
 
   const participant = requireRole("participant");
-  const pid = (c: C) => session(c).account.participantId!;
+  /**
+   * Before any data: the account's id and code still go together in the copy in use, which the
+   * route then reads (the same copy, even if a new one arrives meanwhile). Otherwise nothing.
+   */
+  const linked: MiddlewareHandler<Env> = async (c, next) => {
+    const snap = snapshot();
+    const a = session(c).account;
+    const link = enforceLink(auth, snap.db, a, log);
+    if (link.state !== "ok") {
+      const view = linkView(link);
+      throw new HttpError(403, LINK_MESSAGES[view === "recreate" ? "recreate" : "review"], `account_${view}`);
+    }
+    c.set("snap", snap);
+    c.set("who", { id: a.participantId!, code: a.participantCode! });
+    return next();
+  };
+  const pid = (c: C) => c.get("who").id;
 
-  app.get("/api/data/tables", participant, (c) => {
-    const infos = tableInfos(snapshot().db, ds);
+  app.get("/api/data/tables", participant, linked, (c) => {
+    const infos = tableInfos(c.get("snap").db, ds);
     return c.json({ tables: [...infos.values()].map(({ name, time, unit, columns, key, blobs }) => ({ name, time, unit, columns, key, blobs })) });
   });
 
-  app.get("/api/data/devices", participant, (c) => {
-    const snap = snapshot();
+  app.get("/api/data/devices", participant, linked, (c) => {
+    const snap = c.get("snap");
     return c.json({ devices: devicesOf(snap.db, ds, pid(c)), dataTakenAt: snap.takenAt });
   });
 
-  app.get("/api/data/table/:table", participant, compress(), (c) => {
-    const snap = snapshot();
+  app.get("/api/data/table/:table", participant, linked, compress(), (c) => {
+    const snap = c.get("snap");
     const info = tableInfos(snap.db, ds).get(c.req.param("table"));
     if (!info) throw new HttpError(404, "Tabella non disponibile.", "no_table");
     const since = c.req.query("since");
@@ -275,9 +329,9 @@ export function createApp(deps: AppDeps) {
   });
 
   // rows per table and device, to check the browser's copy
-  app.get("/api/data/counts", participant, (c) => {
-    const snap = snapshot();
-    return c.json({ counts: countsOf(snap.db, ds, pid(c)), dataVersion: snap.version, dataTakenAt: snap.takenAt });
+  app.get("/api/data/counts", participant, linked, (c) => {
+    const snap = c.get("snap");
+    return c.json({ counts: countsOf(snap.db, ds, pid(c)), dataVersion: snap.version, dataTakenAt: snap.takenAt, source });
   });
 
   // ------------------------------------------------------------ participant: comparison with the others
@@ -292,32 +346,34 @@ export function createApp(deps: AppDeps) {
     if (!Number.isInteger(from) || !Number.isInteger(to) || to <= from || to - from > MAX_COMPARE_DAYS * 86_400) throw new HttpError(400, "Periodo non valido.");
     return { metric, from, to };
   };
-  /** the cache (the previous one while a new one is built); the asking participant by their id */
+  /**
+   * The cache (the previous one while a new one is built); the asking participant by their code
+   * (checked by `linked`), never by id: the cache may come from an older copy of the data.
+   */
   const compareSource = async (c: C) => {
     const src = deps.comparison ? await deps.comparison.source() : null;
     if (!src) throw new HttpError(503, "Il confronto non è ancora disponibile. Riprova tra qualche minuto.", "no_comparison");
-    const me = pid(c);
     // never among the others; a participant not yet in the cache is not in it anyway
-    const key = src.people.find((p) => p.id === me)?.key ?? `#${me}`;
+    const key = c.get("who").code;
     const st = deps.comparison!.status();
     c.header("Cache-Control", "no-store");
     return { src, key, meta: { minParticipants: src.minUsers, dataTakenAt: st.dataTakenAt } };
   };
 
-  app.get("/api/compare/daily", participant, async (c) => {
+  app.get("/api/compare/daily", participant, linked, async (c) => {
     const { metric, from, to } = compareQuery(c);
     const { src, key, meta } = await compareSource(c);
     return c.json({ ...meta, days: await src.dailyDistribution(metric, from, to, { excludeUserId: key }) });
   });
 
-  app.get("/api/compare/weekly", participant, async (c) => {
+  app.get("/api/compare/weekly", participant, linked, async (c) => {
     const { metric, from, to } = compareQuery(c);
     const { src, key, meta } = await compareSource(c);
     return c.json({ ...meta, weeks: await src.weeklyDistribution(metric, from, to, { excludeUserId: key }) });
   });
 
   // the asking participant's period value is computed here from the same data as the others'
-  app.get("/api/compare/standing", participant, async (c) => {
+  app.get("/api/compare/standing", participant, linked, async (c) => {
     const { metric, from, to } = compareQuery(c);
     const { src, key, meta } = await compareSource(c);
     return c.json({ ...meta, standing: await src.standingOf(metric, from, to, key) });
@@ -347,33 +403,51 @@ export function createApp(deps: AppDeps) {
 
   const admin = requireRole("admin");
 
+  // every participant account checked against the copy in use (and kept up to date): each one is
+  // shown next to the participant with its code; the others (code gone, «da ricreare») apart
   app.get("/api/admin/participants", admin, (c) => {
-    const people = participantsOverview(snapshot().db, ds);
-    const accounts = auth.list().filter((a) => a.role === "participant");
-    const byParticipant = new Map(accounts.map((a) => [a.participantId!, a]));
-    const known = new Set(people.map((p) => p.id));
+    const db = snapshot().db;
+    const people = participantsOverview(db, ds);
+    const accounts = auth
+      .list()
+      .filter((a) => a.role === "participant")
+      .map((a) => {
+        const link = enforceLink(auth, db, a, log);
+        return { account: auth.get(a.id)!, link };
+      });
+    const byCode = new Map(accounts.filter((x) => x.account.participantCode != null).map((x) => [x.account.participantCode!, x]));
+    const codes = new Set(people.map((p) => p.code));
     return c.json({
       participants: people.map((p) => {
-        const a = byParticipant.get(p.id);
-        return { ...p, suggestedUsername: usernameFromCode(p.code), account: a ? adminAccount(a) : null };
+        const x = byCode.get(p.code);
+        return { ...p, suggestedUsername: usernameFromCode(p.code), account: x ? adminAccount(x.account, x.link) : null };
       }),
-      // accounts whose participant is no longer in the data
-      orphanAccounts: accounts.filter((a) => !known.has(a.participantId!)).map(adminAccount),
+      // accounts whose participant code is not in the data (blocked), or made before the codes were kept
+      orphanAccounts: accounts.filter((x) => x.account.participantCode == null || !codes.has(x.account.participantCode)).map((x) => adminAccount(x.account, x.link)),
     });
   });
 
+  /** id and code of a participant named by the administrator, checked against the copy in use */
+  const namedParticipant = (db: DataSnapshot["db"], b: { participantId?: unknown; code?: unknown }) => {
+    const id = b.participantId;
+    if (typeof id !== "number" || !Number.isInteger(id) || typeof b.code !== "string" || !b.code) throw new HttpError(400, "Partecipante non valido.");
+    const code = participantCode(db, id);
+    if (code == null) throw new HttpError(404, "Partecipante non trovato.", "no_participant");
+    // the list the administrator saw came from another copy of the data
+    if (code !== b.code) throw new HttpError(409, "I dati dei partecipanti sono cambiati: ricarica l'elenco e riprova.", "participant_changed");
+    return { id, code };
+  };
+
   app.post("/api/admin/accounts", admin, async (c) => {
-    const b = await body<{ participantId: number; username: string }>(c);
-    const participantId = b.participantId;
-    if (typeof participantId !== "number" || !Number.isInteger(participantId)) throw new HttpError(400, "Partecipante non valido.");
+    const b = await body<{ participantId: number; code: string; username: string }>(c);
     const db = snapshot().db;
-    if (!participantExists(db, participantId)) throw new HttpError(404, "Partecipante non trovato.", "no_participant");
-    const username = normalizeUsername(typeof b.username === "string" && b.username.trim() ? b.username : usernameFromCode(participantCode(db, participantId) ?? ""));
+    const named = namedParticipant(db, b);
+    const username = normalizeUsername(typeof b.username === "string" && b.username.trim() ? b.username : usernameFromCode(named.code));
     if (!USERNAME_RE.test(username)) throw new HttpError(400, "Il nome utente deve avere 3–40 caratteri: lettere minuscole, cifre, punto, trattino o trattino basso.", "bad_username");
-    if (auth.list().some((a) => a.participantId === participantId)) throw new HttpError(409, "Questo partecipante ha già un account.", "exists");
+    if (auth.byCode(named.code)) throw new HttpError(409, "Questo partecipante ha già un account.", "exists");
     if (auth.credentials(username)) throw new HttpError(409, "Questo nome utente è già usato.", "username_taken");
     const temp = temporaryPassword();
-    const account = auth.create({ username, passwordHash: await hashPassword(temp), role: "participant", participantId, mustChangePassword: true });
+    const account = auth.create({ username, passwordHash: await hashPassword(temp), role: "participant", participant: named, mustChangePassword: true });
     auth.audit(session(c).account, "account_created", account);
     log.info("Account creato", { by: session(c).account.username, username });
     // the only time the temporary password leaves the server
@@ -387,6 +461,26 @@ export function createApp(deps: AppDeps) {
     if (a.role !== "participant") throw new HttpError(403, "Gli account amministratore non si gestiscono da qui.", "forbidden");
     return a;
   };
+
+  // «ricollega a [codice]»: the account's code is in the data with another id (the research database
+  // was recreated). Only an administrator does it, only to the id the code has now; in the audit log.
+  app.post("/api/admin/accounts/:id/relink", admin, async (c) => {
+    const a = targetAccount(c);
+    const b = await body<{ participantId: number; code: string }>(c);
+    const db = snapshot().db;
+    const named = namedParticipant(db, b);
+    const link = checkLink(db, a);
+    if (link.state === "recreate") throw new HttpError(409, "Questo account va ricreato: non si può ricollegare.", "recreate");
+    if (link.state === "ok") throw new HttpError(409, "L'account è già collegato correttamente.", "linked");
+    if (link.state === "missing") throw new HttpError(409, "Il codice dell'account non è più nei dati: l'account resta bloccato.", "missing");
+    if (named.code !== a.participantCode || named.id !== link.participantId) throw new HttpError(409, "Si può ricollegare solo al partecipante con lo stesso codice.", "other_participant");
+    auth.setLink(a.id, "ok", named.id);
+    // the participant logs in again: their device's copy belongs to the old id
+    auth.endSessionsOf(a.id);
+    auth.audit(session(c).account, "account_relinked", auth.get(a.id)!, `codice ${named.code}: numero ${a.participantId} → ${named.id}`);
+    log.info("Account ricollegato", { by: session(c).account.username, username: a.username });
+    return c.json({ account: adminAccount(auth.get(a.id)!, { state: "ok" }) });
+  });
 
   app.post("/api/admin/accounts/:id/reset-password", admin, async (c) => {
     const a = targetAccount(c);
@@ -419,7 +513,14 @@ export function createApp(deps: AppDeps) {
       app: { id: ds.app, label: ds.label },
       data: data.status(),
       comparison: deps.comparison?.status() ?? null,
-      accounts: { participants: accounts.filter((a) => a.role === "participant").length, admins: accounts.filter((a) => a.role === "admin").length },
+      accounts: {
+        participants: accounts.filter((a) => a.role === "participant").length,
+        admins: accounts.filter((a) => a.role === "admin").length,
+        // as of their last check (each request for data, the list of participants)
+        review: accounts.filter((a) => a.role === "participant" && a.linkState === "review").length,
+        recreate: accounts.filter((a) => a.role === "participant" && a.linkState === "recreate").length,
+      },
+      source: config.source.description,
     });
   });
 
@@ -449,6 +550,6 @@ export async function ensureFirstAdmin(auth: AuthStore, config: Config, log: Log
   const problem = passwordProblem(config.admin.password, username);
   if (problem) throw new Error(`ADMIN_PASSWORD: ${problem}`);
   // chosen by whoever configures the server: no forced change
-  auth.create({ username, passwordHash: await hashPassword(config.admin.password), role: "admin", participantId: null, mustChangePassword: false });
+  auth.create({ username, passwordHash: await hashPassword(config.admin.password), role: "admin", participant: null, mustChangePassword: false });
   log.info("Primo amministratore creato", { username });
 }

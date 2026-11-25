@@ -156,5 +156,4 @@ export function participantsOverview(db: DatabaseSync, ds: Dataset): Participant
   });
 }
 
-export const participantExists = (db: DatabaseSync, id: number) => !!db.prepare("SELECT 1 FROM participant WHERE id = ?").get(id);
 export const participantCode = (db: DatabaseSync, id: number) => (db.prepare("SELECT name FROM participant WHERE id = ?").get(id) as { name: string } | undefined)?.name ?? null;

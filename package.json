@@ -21,6 +21,7 @@
     "dev:server": "npm run dev -w @bridge/server",
     "admin:create": "tsx packages/server/src/admin-cli.ts create",
     "admin:reset-password": "tsx packages/server/src/admin-cli.ts reset-password",
+    "admin:accept-source": "tsx packages/server/src/admin-cli.ts accept-source",
     "measure:compare": "tsx packages/server/src/comparison/measure.ts"
   },
   "devDependencies": {

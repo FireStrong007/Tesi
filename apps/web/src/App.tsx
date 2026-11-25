@@ -1,9 +1,11 @@
 import { Loader2Icon, RefreshCwIcon, ShieldAlertIcon, TriangleAlertIcon } from "lucide-react";
 import { AppProvider, type StartState } from "@/app-context";
+import { useEffect } from "react";
 import { AuthProvider, useAuth } from "@/auth";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { sharedDbClient } from "@/lib/db/client";
 import { Toaster } from "@/components/ui/sonner";
 import { match, usePath } from "@/lib/router";
 import { AdminApp } from "@/pages/admin";
@@ -73,6 +75,36 @@ function StartScreen({ error, progress, syncError, retry }: StartState) {
   );
 }
 
+/**
+ * The account no longer names the same participant in the data («da verificare») or was made
+ * before the codes were kept («da ricreare»): no data, and the copy on this device is erased (it
+ * could be someone else's).
+ */
+function AccountProblem({ link }: { link: "review" | "recreate" }) {
+  const { logout } = useAuth();
+  useEffect(() => {
+    const db = sharedDbClient();
+    void db
+      .init()
+      .then(() => db.erase())
+      .catch((e) => console.error("Cancellazione dei dati locali non riuscita", e));
+  }, []);
+  return (
+    <Centered>
+      <ShieldAlertIcon className="text-destructive size-6" />
+      <div className="font-semibold">{link === "recreate" ? "Account da ricreare" : "Account da verificare"}</div>
+      <div className="text-muted-foreground max-w-sm text-sm">
+        {link === "recreate"
+          ? "Questo account non è più valido e va ricreato: chiedi un nuovo account al responsabile dello studio."
+          : "Il tuo account è da verificare: il responsabile dello studio deve controllarlo. Nel frattempo i dati non sono disponibili."}
+      </div>
+      <Button variant="outline" onClick={() => void logout()}>
+        Esci
+      </Button>
+    </Centered>
+  );
+}
+
 /** The participant's app: their data, read from the server and kept on the device. */
 function ParticipantApp() {
   return (
@@ -122,7 +154,9 @@ function Gate() {
     );
   if (state.status === "anonymous") return <LoginPage expired={state.reason === "expired"} />;
   if (state.me.account.mustChangePassword) return <ForcedPasswordChangePage />;
-  return state.me.account.role === "admin" ? <AdminApp /> : <ParticipantApp />;
+  if (state.me.account.role === "admin") return <AdminApp />;
+  const link = state.me.account.link ?? "ok";
+  return link === "ok" ? <ParticipantApp /> : <AccountProblem link={link} />;
 }
 
 export default function App() {

@@ -8,10 +8,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { updateAppTables } from "@bridge/core/adapters";
 import { DEFAULT_GOALS, type Goals } from "@bridge/core/goals";
-import { clearDirty, dirtyFrom, getMeta, ownerOf, prepareLocalDb, setMeta } from "@bridge/core/sync/local-db";
-import { syncCopy, type SyncApi, type SyncProgress, type SyncReport } from "@bridge/core/sync/sync";
+import { clearDirty, dirtyFrom, getMeta, openOwnedCopy, ownerKey, setMeta, type CopyOwner } from "@bridge/core/sync/local-db";
+import { SourceChangedError, syncCopy, type SyncApi, type SyncProgress, type SyncReport } from "@bridge/core/sync/sync";
 import { startOfDay } from "@bridge/core/time-zone";
-import { onLogout, useMe } from "@/auth";
+import { onLogout, useAuth, useMe } from "@/auth";
 import { ApiError, apiGet, apiPost, errorMessage } from "@/lib/api";
 import { sharedDbClient, type DbClient } from "@/lib/db/client";
 import { AVAILABILITY_SQL } from "@/lib/empty-states";
@@ -119,6 +119,13 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
   const me = useMe();
   const app = me.app.id;
   const participantId = me.account.participantId!;
+  const { reload: reloadMe } = useAuth();
+  // whose the copy is: account, participant (id and code), data source; any change wipes it
+  const owner = useMemo<CopyOwner>(
+    () => ({ app, username: me.account.username, participantId, participantCode: me.account.participantCode ?? "", source: me.source }),
+    [app, me.account.username, participantId, me.account.participantCode, me.source],
+  );
+  const ownerId = ownerKey(owner);
   // one client for the whole page (two workers cannot open the same OPFS files)
   const [db] = useState(sharedDbClient);
   const [opened, setOpened] = useState<{ persistent: boolean } | null>(null);
@@ -163,6 +170,9 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
           await rebuild();
           setStatus((s) => ({ ...s, syncing: false, progress: null, empty: false }));
         } catch (e) {
+          // the server reads other data, or the account no longer names the same participant: ask
+          // again who is logged in (the copy is then wiped, or the account's notice shown)
+          if (e instanceof SourceChangedError || (e instanceof ApiError && e.code?.startsWith("account_"))) void reloadMe();
           // a 401 sends the app back to the login screen (lib/api); otherwise the copy stays as it was
           const message = e instanceof ApiError && e.status === 0 ? "Sei offline: vedi gli ultimi dati scaricati." : errorMessage(e);
           setStatus((s) => ({ ...s, syncing: false, progress: null, error: message }));
@@ -172,20 +182,16 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
       })();
       return running.current;
     },
-    [db, rebuild],
+    [db, rebuild, reloadMe],
   );
 
   // open the copy: wipe it if it is someone else's, show what it has, then sync
   useEffect(() => {
     let cancelled = false;
-    const owner = ownerOf(app, me.account.username);
     void (async () => {
       try {
         const info = await timed("open", () => db.init());
-        if (!(await prepareLocalDb(db, app, owner))) {
-          await db.wipe();
-          await prepareLocalDb(db, app, owner);
-        }
+        await openOwnedCopy(db, owner, () => db.wipe());
         const hasData = !!(await getMeta(db, "last_sync_at"));
         const cached = await getMeta(db, "goals");
         if (cached) setGoals({ ...DEFAULT_GOALS, ...JSON.parse(cached) });
@@ -209,7 +215,7 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
     return () => {
       cancelled = true;
     };
-  }, [db, app, me.account.username, rebuild, runSync]);
+  }, [db, ownerId, rebuild, runSync]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // every hour while the app is open, and when it comes back to the foreground after an hour
   useEffect(() => {
@@ -247,12 +253,12 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
       },
       redownload: async () => {
         await db.wipe();
-        await prepareLocalDb(db, app, ownerOf(app, me.account.username));
+        await openOwnedCopy(db, owner, () => db.wipe());
         setStatus((s) => ({ ...s, empty: true, lastSyncAt: null }));
         await runSync(false);
       },
     };
-  }, [opened, db, goals, participantId, me.account.username, devices, available, status, dataVersion, runSync, app]);
+  }, [opened, db, goals, participantId, me.account.username, devices, available, status, dataVersion, runSync, owner]);
 
   if (!value || value.status.empty) return <>{fallback({ error, progress: status.progress, syncError: status.syncing ? null : status.error, retry: () => void runSync(false) })}</>;
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

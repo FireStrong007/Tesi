@@ -2,10 +2,12 @@
  * Administrator accounts are managed only from the server's command line, never from the web:
  *   npm run admin:create -- <nome>          a new administrator
  *   npm run admin:reset-password -- <nome>  a new temporary password (any account)
- * Both print a temporary password once (it must be changed at the first login) and record the
- * action in audit_log with the author "cli:<operating system user>". They read APP / AUTH_DB from
- * the environment or the .env file at the repository root, like the server; they can run while
- * the server is running (the accounts database is in WAL mode).
+ *   npm run admin:accept-source             the accounts database accepts the data source now
+ *                                           configured (the same data moved elsewhere)
+ * The first two print a temporary password once (it must be changed at the first login). Every
+ * command records the action in audit_log with the author "cli:<operating system user>". They read
+ * APP / AUTH_DB / DATA_* from the environment or the .env file at the repository root, like the
+ * server; they can run while the server is running (the accounts database is in WAL mode).
  */
 import { existsSync } from "node:fs";
 import { userInfo } from "node:os";
@@ -30,12 +32,13 @@ export function cliActor() {
   return { id: null, username: `cli:${user}` };
 }
 
-const USAGE = "Uso: npm run admin:create -- <nome>  |  npm run admin:reset-password -- <nome>";
+const USAGE = "Uso: npm run admin:create -- <nome>  |  npm run admin:reset-password -- <nome>  |  npm run admin:accept-source";
 
 /** Runs one command; returns the process exit code. */
 export async function runAdminCommand(args: string[], env: NodeJS.ProcessEnv, baseDir: string, io: CliIo, now: () => number = Date.now): Promise<number> {
   const [command, rawName, ...rest] = args;
-  if (!command || !rawName || rest.length || !["create", "reset-password"].includes(command)) {
+  const named = ["create", "reset-password"].includes(command);
+  if (!command || rest.length || (named ? !rawName : command !== "accept-source" || rawName)) {
     io.err(USAGE);
     return 2;
   }
@@ -49,10 +52,23 @@ export async function runAdminCommand(args: string[], env: NodeJS.ProcessEnv, ba
     }
     throw e;
   }
-  const username = normalizeUsername(rawName);
   const auth = new AuthStore(cfg.authDb, cfg.sessionIdleMs, now);
   try {
     const actor = cliActor();
+    if (command === "accept-source") {
+      const before = auth.source();
+      if (before?.fingerprint === cfg.source.fingerprint) {
+        io.out(`Il database degli account (${cfg.authDb}) è già legato a questa sorgente: ${cfg.source.description}.`);
+        return 0;
+      }
+      auth.acceptSource(cfg.source, actor);
+      io.out(`Database degli account: ${cfg.authDb}`);
+      io.out(`Sorgente precedente: ${before?.description ?? "nessuna"}`);
+      io.out(`Sorgente accettata: ${cfg.source.description}`);
+      io.out("Al prossimo uso ogni account viene controllato sui nuovi dati: quelli con numero e codice corrispondenti tornano attivi da soli, gli altri restano «da verificare».");
+      return 0;
+    }
+    const username = normalizeUsername(rawName);
     const temp = temporaryPassword();
     const existing = auth.credentials(username);
     if (command === "create") {
@@ -64,7 +80,7 @@ export async function runAdminCommand(args: string[], env: NodeJS.ProcessEnv, ba
         io.err(`Esiste già un account «${username}». Per una nuova password: npm run admin:reset-password -- ${username}`);
         return 1;
       }
-      const account = auth.create({ username, passwordHash: await hashPassword(temp), role: "admin", participantId: null, mustChangePassword: true });
+      const account = auth.create({ username, passwordHash: await hashPassword(temp), role: "admin", participant: null, mustChangePassword: true });
       auth.audit(actor, "account_created", account);
       io.out(`Amministratore «${account.username}» creato (database degli account: ${cfg.authDb}).`);
     } else {

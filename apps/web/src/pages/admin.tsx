@@ -1,10 +1,13 @@
 /**
  * The administrator's area: the participants of the research database (code, devices, last
  * measurement and upload: no health data), their accounts, the data copy's state and the log of
- * the administrators' actions.
+ * the administrators' actions. An account whose participant id and code no longer go together in
+ * the data is «da verificare»: «Ricollega a [codice]» when the code has a new id (one click, in
+ * the log), blocked when the code is gone; accounts made before the codes were kept are «da
+ * ricreare».
  */
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { CheckIcon, CopyIcon, KeyRoundIcon, Loader2Icon, LogOutIcon, RefreshCwIcon, SearchIcon, ShieldCheckIcon, UserPlusIcon, UserRoundCheckIcon, UserRoundXIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, KeyRoundIcon, Link2Icon, Loader2Icon, LogOutIcon, RefreshCwIcon, SearchIcon, ShieldCheckIcon, TriangleAlertIcon, UserPlusIcon, UserRoundCheckIcon, UserRoundXIcon } from "lucide-react";
 import { fmtDateTime } from "@bridge/core/format";
 import { useAuth, useMe } from "@/auth";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -22,6 +25,12 @@ interface AdminAccount {
   id: number;
   username: string;
   participantId: number | null;
+  participantCode: string | null;
+  linkState: "ok" | "review" | "recreate";
+  /** relink: the code has another id in the data; missing: the code is gone; recreate: no code kept */
+  problem: "relink" | "missing" | "recreate" | null;
+  /** the id the code has now (problem relink) */
+  relinkTo?: number;
   disabled: boolean;
   mustChangePassword: boolean;
   createdAt: number;
@@ -41,14 +50,18 @@ interface Participant {
 interface Status {
   app: { id: string; label: string };
   data: { mode: "file" | "backup"; takenAt: number | null; lastAttemptAt: number | null; lastError: string | null; refreshing: boolean };
-  accounts: { participants: number; admins: number };
+  accounts: { participants: number; admins: number; review: number; recreate: number };
+  /** the data source the accounts belong to */
+  source: string;
 }
 interface AuditEntry {
   id: number;
   at: number;
   actorUsername: string;
-  action: "account_created" | "password_reset" | "account_disabled" | "account_enabled";
+  action: "account_created" | "password_reset" | "account_disabled" | "account_enabled" | "account_flagged" | "account_restored" | "account_relinked" | "source_accepted";
   targetUsername: string | null;
+  /** what changed, in words (e.g. "codice SYN-G01: numero 1 → 8") */
+  detail: string | null;
 }
 
 const ACTION_LABEL: Record<AuditEntry["action"], string> = {
@@ -56,16 +69,22 @@ const ACTION_LABEL: Record<AuditEntry["action"], string> = {
   password_reset: "ha reimpostato la password di",
   account_disabled: "ha disattivato",
   account_enabled: "ha riattivato",
+  account_flagged: "ha segnato da verificare l'account",
+  account_restored: "ha riattivato (numero e codice di nuovo corrispondenti) l'account",
+  account_relinked: "ha ricollegato l'account",
+  source_accepted: "ha accettato una nuova sorgente dati",
 };
 
-/** actions run with npm run admin:... on the server are recorded as "cli:<system user>" */
-const actorLabel = (u: string) => (u.startsWith("cli:") ? `Comando sul server (${u.slice(4)})` : u);
+/** actions run with npm run admin:... on the server are recorded as "cli:<system user>"; the server's own as "sistema" */
+const actorLabel = (u: string) => (u.startsWith("cli:") ? `Comando sul server (${u.slice(4)})` : u === "sistema" ? "Il server" : u);
 
 /** server times are in milliseconds */
 const when = (ms: number | null) => (ms == null ? "–" : fmtDateTime(ms / 1000));
 const deviceLabel = (d: Device) => [d.name, d.model ? `modello ${d.model}` : null, d.firmware_version ? `firmware ${d.firmware_version}` : null].filter(Boolean).join(" · ");
 
 function AccountBadge({ a }: { a: AdminAccount }) {
+  if (a.problem === "recreate") return <Badge variant="destructive">Da ricreare</Badge>;
+  if (a.problem) return <Badge variant="destructive">Da verificare</Badge>;
   if (a.disabled) return <Badge variant="destructive">Disattivato</Badge>;
   if (a.mustChangePassword) return <Badge variant="outline">In attesa del primo accesso</Badge>;
   return <Badge variant="secondary">Attivo</Badge>;
@@ -129,7 +148,8 @@ function CreateAccountDialog({ participant, onClose, onCreated }: { participant:
     setBusy(true);
     setError(null);
     try {
-      const r = await apiPost<{ account: AdminAccount; temporaryPassword: string }>("admin/accounts", { participantId: participant.id, username });
+      // id AND code: the server refuses if the data changed since this list was loaded
+      const r = await apiPost<{ account: AdminAccount; temporaryPassword: string }>("admin/accounts", { participantId: participant.id, code: participant.code, username });
       onCreated(r.account.username, r.temporaryPassword);
     } catch (err) {
       setError(errorMessage(err));
@@ -169,9 +189,14 @@ function CreateAccountDialog({ participant, onClose, onCreated }: { participant:
   );
 }
 
-type Confirm = { kind: "reset" | "disable" | "enable"; participant: Participant };
+type Confirm = { kind: "reset" | "disable" | "enable" | "relink"; participant: Participant };
 
-const CONFIRM_TEXT: Record<Confirm["kind"], { title: (u: string) => string; body: string; button: string }> = {
+const CONFIRM_TEXT: Record<Confirm["kind"], { title: (u: string, code: string) => string; body: string; button: string }> = {
+  relink: {
+    title: (u, code) => `Ricollegare ${u} a ${code}?`,
+    body: "Nei dati dello studio questo codice ha ora un altro numero (database del server ricreato o ripristinato). Controlla che sia la stessa persona: l'account vedrà i dati del partecipante con questo codice. Il partecipante viene disconnesso e la copia sul suo dispositivo verrà scaricata di nuovo. L'azione resta nel registro.",
+    button: "Ricollega",
+  },
   reset: {
     title: (u) => `Reimpostare la password di ${u}?`,
     body: "La password attuale smette di funzionare e il partecipante viene disconnesso da tutti i dispositivi. Riceverai una nuova password temporanea.",
@@ -191,8 +216,10 @@ function ConfirmDialog({ confirm, onClose, onDone }: { confirm: Confirm | null; 
     if (!confirm?.participant.account) return;
     setBusy(true);
     try {
-      const path = { reset: "reset-password", disable: "disable", enable: "enable" }[confirm.kind];
-      onDone(await apiPost(`admin/accounts/${confirm.participant.account.id}/${path}`), confirm.kind);
+      const path = { reset: "reset-password", disable: "disable", enable: "enable", relink: "relink" }[confirm.kind];
+      // relink: to the id and code shown, nothing else
+      const body = confirm.kind === "relink" ? { participantId: confirm.participant.id, code: confirm.participant.code } : undefined;
+      onDone(await apiPost(`admin/accounts/${confirm.participant.account.id}/${path}`, body), confirm.kind);
     } catch (err) {
       toast.error(errorMessage(err));
       onClose();
@@ -205,7 +232,7 @@ function ConfirmDialog({ confirm, onClose, onDone }: { confirm: Confirm | null; 
     <Dialog open={!!confirm} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t?.title(confirm!.participant.account?.username ?? "")}</DialogTitle>
+          <DialogTitle>{t?.title(confirm!.participant.account?.username ?? "", confirm!.participant.code)}</DialogTitle>
           <DialogDescription>{t?.body}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -238,6 +265,20 @@ function ParticipantItem({ p, onCreate, onConfirm }: { p: Participant; onCreate:
         <div className="font-mono font-semibold">{p.code}</div>
         <div className="md:mt-1">{a ? <AccountBadge a={a} /> : <Badge variant="outline">Senza account</Badge>}</div>
       </div>
+      {a?.problem === "relink" && (
+        <Alert variant="destructive" className="md:order-last md:col-span-5">
+          <TriangleAlertIcon />
+          <AlertTitle className="line-clamp-none">Account da verificare: nessun dato finché non lo ricolleghi</AlertTitle>
+          <AlertDescription>
+            <p>
+              L'account {a.username} era legato al numero {a.participantId}; nei dati il codice {p.code} ha ora il numero {p.id}.
+            </p>
+            <Button size="sm" variant="outline" className="mt-2" onClick={() => onConfirm("relink")}>
+              <Link2Icon /> Ricollega a {p.code}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       <Field label={p.devices.length === 1 ? "Dispositivo" : `Dispositivi (${p.devices.length})`}>
         {p.devices.length ? p.devices.map((d) => <div key={String(d.id)} className="truncate">{deviceLabel(d)}</div>) : "Nessuno"}
       </Field>
@@ -276,10 +317,34 @@ function ParticipantItem({ p, onCreate, onConfirm }: { p: Participant; onCreate:
   );
 }
 
+/** Accounts not shown next to a participant: the code is gone (blocked) or was never kept (to recreate). */
+function OrphanAccounts({ accounts }: { accounts: AdminAccount[] }) {
+  if (!accounts.length) return null;
+  return (
+    <Alert variant="destructive" className="mb-3">
+      <TriangleAlertIcon />
+      <AlertTitle className="line-clamp-none">{accounts.length === 1 ? "Un account non corrisponde a nessun partecipante" : `${accounts.length} account non corrispondono a nessun partecipante`}</AlertTitle>
+      <AlertDescription>
+        <ul className="mt-1 space-y-1">
+          {accounts.map((a) => (
+            <li key={a.id}>
+              <span className="font-medium">{a.username}</span>:{" "}
+              {a.problem === "recreate"
+                ? "da ricreare, è stato creato prima che si salvasse il codice del partecipante. Non vede nessun dato."
+                : `bloccato, il codice ${a.participantCode} non è più nei dati dello studio. Non vede nessun dato.`}
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 export function AdminApp() {
   const me = useMe();
   const { logout } = useAuth();
   const [participants, setParticipants] = useState<Participant[] | null>(null);
+  const [orphans, setOrphans] = useState<AdminAccount[]>([]);
   const [status, setStatus] = useState<Status | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -293,7 +358,7 @@ export function AdminApp() {
     try {
       const [s, p, a] = await Promise.all([
         apiGet<Status>("admin/status"),
-        apiGet<{ participants: Participant[] }>("admin/participants").catch((e) => {
+        apiGet<{ participants: Participant[]; orphanAccounts: AdminAccount[] }>("admin/participants").catch((e) => {
           setLoadError(errorMessage(e));
           return null;
         }),
@@ -302,6 +367,7 @@ export function AdminApp() {
       setStatus(s);
       if (p) {
         setParticipants(p.participants);
+        setOrphans(p.orphanAccounts);
         setLoadError(null);
       }
       setAudit(a.entries);
@@ -316,6 +382,7 @@ export function AdminApp() {
     return (participants ?? []).filter((p) => !q || p.code.toLowerCase().includes(q) || p.account?.username.includes(q));
   }, [participants, query]);
   const withAccount = (participants ?? []).filter((p) => p.account).length;
+  const toReview = (participants ?? []).filter((p) => p.account?.problem).length;
 
   return (
     <div className="min-h-dvh">
@@ -357,6 +424,7 @@ export function AdminApp() {
               <Field label="Partecipanti">{participants ? participants.length : "–"}</Field>
               <Field label="Con account">{participants ? withAccount : "–"}</Field>
             </div>
+            {status?.source && <Field label="Sorgente dei dati">{status.source}</Field>}
             {status?.data.lastError && (
               <Alert variant="destructive">
                 <AlertTitle>L'ultimo aggiornamento non è riuscito</AlertTitle>
@@ -381,6 +449,14 @@ export function AdminApp() {
                 <AlertDescription>{loadError}</AlertDescription>
               </Alert>
             )}
+            <OrphanAccounts accounts={orphans} />
+            {toReview > 0 && (
+              <Alert variant="destructive" className="mb-3">
+                <TriangleAlertIcon />
+                <AlertTitle>{toReview === 1 ? "Un account da verificare" : `${toReview} account da verificare`}</AlertTitle>
+                <AlertDescription>Il numero del partecipante non corrisponde più al suo codice nei dati: l'account non vede nessun dato finché non lo ricolleghi.</AlertDescription>
+              </Alert>
+            )}
             {!participants && !loadError && <Loader2Icon className="text-muted-foreground mx-auto my-6 size-5 animate-spin" />}
             {participants && !visible.length && <p className="text-muted-foreground py-6 text-center text-sm">{participants.length ? "Nessun partecipante corrisponde alla ricerca." : "Il database dello studio non ha ancora partecipanti."}</p>}
             <ul className="divide-y">
@@ -394,7 +470,7 @@ export function AdminApp() {
         <Card>
           <CardHeader>
             <CardTitle>Registro delle azioni</CardTitle>
-            <CardDescription>Account creati, password reimpostate, account disattivati e riattivati. Le ultime 200 azioni.</CardDescription>
+            <CardDescription>Account creati, password reimpostate, account disattivati, riattivati, da verificare e ricollegati, sorgenti dei dati accettate. Le ultime 200 azioni.</CardDescription>
           </CardHeader>
           <CardContent>
             {audit.length ? (
@@ -404,6 +480,7 @@ export function AdminApp() {
                     <span className="text-muted-foreground shrink-0 tabular-nums sm:w-40">{when(e.at)}</span>
                     <span>
                       <span className="font-medium">{actorLabel(e.actorUsername)}</span> {ACTION_LABEL[e.action]} <span className="font-medium">{e.targetUsername}</span>
+                      {e.detail && <span className="text-muted-foreground block text-xs break-words">{e.detail}</span>}
                     </span>
                   </li>
                 ))}
@@ -430,7 +507,7 @@ export function AdminApp() {
         onDone={(r, kind) => {
           setConfirm(null);
           if (kind === "reset" && r.temporaryPassword) setShown({ username: r.account.username, password: r.temporaryPassword, created: false });
-          else toast.success(kind === "disable" ? `${r.account.username} disattivato` : `${r.account.username} riattivato`);
+          else toast.success(kind === "disable" ? `${r.account.username} disattivato` : kind === "relink" ? `${r.account.username} ricollegato` : `${r.account.username} riattivato`);
           void load();
         }}
       />

@@ -55,7 +55,7 @@ export interface TestServer {
   client(opts?: { origin?: string | null; ip?: string }): Client;
 }
 
-export async function testServer(opts: { app?: AppId; dir: string; dataFile?: string; env?: Record<string, string>; data?: DataSource; builder?: Builder }): Promise<TestServer> {
+export async function testServer(opts: { app?: AppId; dir: string; dataFile?: string; env?: Record<string, string>; data?: DataSource; builder?: Builder; authDb?: string }): Promise<TestServer> {
   const appId = opts.app ?? "vitabridge";
   const config = loadConfig(
     {
@@ -63,7 +63,7 @@ export async function testServer(opts: { app?: AppId; dir: string; dataFile?: st
       PUBLIC_ORIGIN: ORIGIN,
       DATA_MODE: "file",
       DATA_FILE: opts.dataFile ?? syntheticDb(appId, opts.dir),
-      AUTH_DB: join(opts.dir, `auth-${Math.random().toString(36).slice(2)}.db`),
+      AUTH_DB: opts.authDb ?? join(opts.dir, `auth-${Math.random().toString(36).slice(2)}.db`),
       ADMIN_USERNAME: ADMIN.username,
       ADMIN_PASSWORD: ADMIN.password,
       ...opts.env,
@@ -75,6 +75,13 @@ export async function testServer(opts: { app?: AppId; dir: string; dataFile?: st
   const clock = { t: NOW.getTime() };
   const now = () => clock.t;
   const auth = new AuthStore(config.authDb, config.sessionIdleMs, now);
+  // like main.ts: the accounts belong to one data source (throws on another one)
+  try {
+    auth.bindSource(config.source);
+  } catch (e) {
+    auth.close();
+    throw e;
+  }
   const data = opts.data ?? createDataSource(config.data, DATASETS[appId], log);
   afterAll(() => {
     data.close();
@@ -162,7 +169,7 @@ export async function participantClients(s: TestServer, codes: string[]) {
   const out = new Map<string, { client: Client; participantId: number; password: string }>();
   for (const code of codes) {
     const p = body.participants.find((x) => x.code === code)!;
-    const created = await admin.post<{ temporaryPassword: string }>("/api/admin/accounts", { participantId: p.id });
+    const created = await admin.post<{ temporaryPassword: string }>("/api/admin/accounts", { participantId: p.id, code: p.code });
     const client = s.client();
     await client.login(p.suggestedUsername, created.body.temporaryPassword);
     const password = `Nuova-password-${code}`;

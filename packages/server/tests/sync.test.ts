@@ -13,9 +13,9 @@ import { createAppTables, updateAppTables } from "@bridge/core/adapters";
 import { DATASETS } from "@bridge/core/datasets";
 import { oo1Executor, type Oo1Db, type SqlExecutor } from "@bridge/core/db/sql";
 import { loadRange } from "@bridge/core/range-data";
-import { clearDirty, dirtyFrom, ownerOf, prepareLocalDb } from "@bridge/core/sync/local-db";
+import { clearDirty, dirtyFrom, getMeta, openOwnedCopy, prepareLocalDb, type CopyOwner } from "@bridge/core/sync/local-db";
 import { LOCAL_VIEWS } from "@bridge/core/server/views";
-import { WINDOW_DAYS, syncCopy, type SyncApi } from "@bridge/core/sync/sync";
+import { SourceChangedError, WINDOW_DAYS, syncCopy, type SyncApi } from "@bridge/core/sync/sync";
 import { addDays, startOfDay } from "@bridge/core/time-zone";
 import type { DataSource } from "../src/data-source";
 import { executor } from "../src/sqlite";
@@ -70,6 +70,11 @@ describe("the browser's copy of a participant's data", () => {
   let api: SyncApi;
   let pid: number;
   let otherApi: SyncApi;
+  let g01Id: number;
+  /** the server's data source, as /api/auth/me gives it */
+  let source: string;
+  const g04 = (o: Partial<CopyOwner> = {}): CopyOwner => ({ app: "vitabridge", username: "syn-g04", participantId: pid, participantCode: "SYN-G04", source, ...o });
+  const g01 = (): CopyOwner => ({ app: "vitabridge", username: "syn-g01", participantId: g01Id, participantCode: "SYN-G01", source });
 
   beforeAll(async () => {
     const path = join(dir, "server-copy.db");
@@ -81,11 +86,14 @@ describe("the browser's copy of a participant's data", () => {
     api = apiOf(participants.get("SYN-G04")!.client);
     pid = participants.get("SYN-G04")!.participantId;
     otherApi = apiOf(participants.get("SYN-G01")!.client);
+    g01Id = participants.get("SYN-G01")!.participantId;
+    source = (await participants.get("SYN-G04")!.client.get<{ source: string }>("/api/auth/me")).body.source;
+    expect(source).toMatch(/^[0-9a-f]{16}$/);
   });
 
   it("first sync: exactly the participant's rows of every table and device, and their devices", async () => {
     const local = localDb();
-    expect(await prepareLocalDb(local, "vitabridge", ownerOf("vitabridge", "syn-g04"))).toBe(true);
+    expect(await prepareLocalDb(local, g04())).toBe(true);
     const report = await syncCopy(local, api);
     expect(report.rows).toBeGreaterThan(1000);
     expect(report.recounted).toEqual([]);
@@ -103,7 +111,7 @@ describe("the browser's copy of a participant's data", () => {
     expect(await loadRange(local, pid, from, to)).toEqual(await loadRange(serverSide, pid, from, to));
     // another participant's copy has none of these rows
     const other = localDb();
-    await prepareLocalDb(other, "vitabridge", ownerOf("vitabridge", "syn-g01"));
+    await prepareLocalDb(other, g01());
     await syncCopy(other, otherApi);
     const theirs = await other.all<{ u: number }>(`SELECT DISTINCT USER_ID AS u FROM GARMIN_ACTIVITY_SAMPLE`);
     expect(theirs.map((r) => r.u)).not.toContain(pid);
@@ -111,7 +119,7 @@ describe("the browser's copy of a participant's data", () => {
 
   it("the last-3-days window is per device: a change on the older band is caught too", async () => {
     const local = localDb();
-    await prepareLocalDb(local, "vitabridge", ownerOf("vitabridge", "syn-g04"));
+    await prepareLocalDb(local, g04());
     await syncCopy(local, api);
     const bands = server.db.prepare("SELECT DEVICE_ID AS d, max(TIMESTAMP) AS m FROM GARMIN_STRESS_SAMPLE WHERE USER_ID = ? GROUP BY DEVICE_ID ORDER BY m").all(pid) as { d: number; m: number }[];
     expect(bands.length).toBe(2);
@@ -139,7 +147,7 @@ describe("the browser's copy of a participant's data", () => {
 
   it("a count that does not match (an old period recovered on the server) brings that device's table again, in full", async () => {
     const local = localDb();
-    await prepareLocalDb(local, "vitabridge", ownerOf("vitabridge", "syn-g04"));
+    await prepareLocalDb(local, g04());
     await syncCopy(local, api);
     const band = (server.db.prepare("SELECT DEVICE_ID AS d, min(TIMESTAMP) AS m FROM GARMIN_ACTIVITY_SAMPLE WHERE USER_ID = ? GROUP BY DEVICE_ID ORDER BY m DESC LIMIT 1").get(pid) as { d: number; m: number });
     // a day recovered by hand, weeks before anything in the copy
@@ -164,7 +172,7 @@ describe("the browser's copy of a participant's data", () => {
 
   it("after a sync only the touched days of the app's tables are rebuilt, with the same result as a full rebuild", async () => {
     const local = localDb();
-    await prepareLocalDb(local, "vitabridge", ownerOf("vitabridge", "syn-g04"));
+    await prepareLocalDb(local, g04());
     await syncCopy(local, api);
     expect(await dirtyFrom(local)).toBe("all"); // first download: everything
     expect(await updateAppTables(local, "vitabridge", { from: null })).toBe("full");
@@ -187,7 +195,7 @@ describe("the browser's copy of a participant's data", () => {
 
     // the reference: a fresh copy, tables rebuilt in full
     const fresh = localDb();
-    await prepareLocalDb(fresh, "vitabridge", ownerOf("vitabridge", "syn-g04"));
+    await prepareLocalDb(fresh, g04());
     await syncCopy(fresh, api);
     await updateAppTables(fresh, "vitabridge", { from: null });
     for (const v of LOCAL_VIEWS) {
@@ -200,9 +208,31 @@ describe("the browser's copy of a participant's data", () => {
 
   it("a copy belongs to one person: another login must wipe it first", async () => {
     const local = localDb();
-    expect(await prepareLocalDb(local, "vitabridge", ownerOf("vitabridge", "syn-g04"))).toBe(true);
-    expect(await prepareLocalDb(local, "vitabridge", ownerOf("vitabridge", "syn-g04"))).toBe(true);
-    expect(await prepareLocalDb(local, "vitabridge", ownerOf("vitabridge", "syn-g01"))).toBe(false);
-    expect(await prepareLocalDb(local, "heartbridge", ownerOf("heartbridge", "syn-g04"))).toBe(false);
+    expect(await prepareLocalDb(local, g04())).toBe(true);
+    expect(await prepareLocalDb(local, g04())).toBe(true);
+    expect(await prepareLocalDb(local, g01())).toBe(false);
+    expect(await prepareLocalDb(local, g04({ app: "heartbridge" }))).toBe(false);
+    // the same account, but another participant id or code, or another data source
+    expect(await prepareLocalDb(local, g04({ participantId: pid + 1 }))).toBe(false);
+    expect(await prepareLocalDb(local, g04({ participantCode: "SYN-G05" }))).toBe(false);
+    expect(await prepareLocalDb(local, g04({ source: "0000000000000000" }))).toBe(false);
+  });
+
+  it("a copy made from another data source: the sync writes nothing, and opening it again wipes it", async () => {
+    const local = localDb();
+    // a copy from yesterday's source, with its rows
+    await prepareLocalDb(local, g04({ source: "aaaaaaaaaaaaaaaa" }));
+    await local.run("INSERT INTO GARMIN_STRESS_SAMPLE (TIMESTAMP, DEVICE_ID, USER_ID, STRESS) VALUES (1, 1, ?, 42)", [pid]);
+    await expect(syncCopy(local, api)).rejects.toBeInstanceOf(SourceChangedError);
+    expect(await local.all("SELECT * FROM GARMIN_ACTIVITY_SAMPLE")).toEqual([]);
+    expect(await getMeta(local, "last_sync_at")).toBeNull();
+    // the app opens the copy for the source the server reads now: wiped, then downloaded again
+    expect(await openOwnedCopy(local, g04())).toBe(true);
+    expect(await local.all("SELECT * FROM GARMIN_STRESS_SAMPLE")).toEqual([]);
+    expect(await getMeta(local, "source")).toBe(source);
+    await syncCopy(local, api);
+    expect(await rowsOf(local, null)).toEqual(await rowsOf(executor(server.db), pid));
+    // the same owner again: kept
+    expect(await openOwnedCopy(local, g04())).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runAdminCommand } from "../src/admin-cli";
-import { ADMIN, tempDir, testServer } from "./helpers";
+import { ADMIN, syntheticDb, tempDir, testServer } from "./helpers";
 
 const dir = tempDir();
 
@@ -9,7 +9,7 @@ const dir = tempDir();
 async function cli(authDb: string, ...args: string[]) {
   const out: string[] = [];
   const err: string[] = [];
-  const code = await runAdminCommand(args, { AUTH_DB: authDb }, dir, { out: (l) => out.push(l), err: (l) => err.push(l) });
+  const code = await runAdminCommand(args, { AUTH_DB: authDb, DATA_FILE: syntheticDb("vitabridge", dir) }, dir, { out: (l) => out.push(l), err: (l) => err.push(l) });
   const password = out.map((l) => /^Password temporanea: (\S+)$/.exec(l)?.[1]).find(Boolean) ?? null;
   return { code, out, err, password };
 }
@@ -67,7 +67,7 @@ describe("administrator commands on the server", () => {
 
   it("reads AUTH_DB relative to the repository root, like the server", async () => {
     const out: string[] = [];
-    const code = await runAdminCommand(["create", "terzo"], { AUTH_DB: "auth-relativo.db" }, dir, { out: (l) => out.push(l), err: () => {} });
+    const code = await runAdminCommand(["create", "terzo"], { AUTH_DB: "auth-relativo.db", DATA_FILE: syntheticDb("vitabridge", dir) }, dir, { out: (l) => out.push(l), err: () => {} });
     expect(code).toBe(0);
     expect(out[0]).toContain(join(dir, "auth-relativo.db"));
   });

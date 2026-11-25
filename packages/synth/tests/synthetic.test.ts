@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import { DATASETS } from "@bridge/core/datasets";
+import { diffSnapshots, snapshotDir } from "../src/data-guard";
 import { cohortParticipants, defaultGarminParticipants, writeGarminDb } from "../src/garmin-db";
 import { defaultGimaParticipants, writeGimaDb } from "../src/gima-db";
 
@@ -76,5 +77,21 @@ describe("synthetic server databases", () => {
     expect(ecg.some((e) => e.duration_ms === 0)).toBe(true);
     expect(count(db, "SELECT count(*) AS n FROM ECG_MEASUREMENTS WHERE ai_heart > 300")).toBeGreaterThan(0);
     db.close();
+  });
+});
+
+describe("data/ guard (vitest.global-setup.ts)", () => {
+  it("sees a changed, a removed and a new file, and nothing when the folder is untouched", async () => {
+    const d = join(dir, "guard");
+    mkdirSync(d);
+    writeFileSync(join(d, "a.db"), "uno");
+    writeFileSync(join(d, "b.db"), "due");
+    const before = await snapshotDir(d);
+    expect(diffSnapshots(before, await snapshotDir(d))).toEqual([]);
+    writeFileSync(join(d, "a.db"), "uno!");
+    rmSync(join(d, "b.db"));
+    writeFileSync(join(d, "a.db-wal"), "");
+    expect(diffSnapshots(before, await snapshotDir(d))).toEqual(["a.db: modificato", "b.db: rimosso", "a.db-wal: nuovo file"]);
+    expect(await snapshotDir(join(d, "non-esiste"))).toEqual({});
   });
 });

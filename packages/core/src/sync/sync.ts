@@ -10,9 +10,11 @@
  *    device's table is downloaded again in full;
  *  - a device the server no longer has for a table is removed from the copy.
  * If the server's data copy changes during the sync (dataVersion), the whole sync runs once more.
+ * If the server reads another data source than the copy's (meta.source), nothing is written:
+ * SourceChangedError, and the app wipes the copy and downloads it again.
  */
 import type { SqlExecutor, SqlParam, Statement } from "../db/sql";
-import { DEVICE_COLUMNS, markDirty, setMeta } from "./local-db";
+import { DEVICE_COLUMNS, getMeta, markDirty, setMeta } from "./local-db";
 
 export const WINDOW_DAYS = 3;
 export const PAGE_SIZE = 5000;
@@ -34,6 +36,8 @@ export interface CountsResponse {
   counts: Record<string, DeviceCount[]>;
   dataVersion: number;
   dataTakenAt: number | null;
+  /** the server's data source (the same fingerprint as /api/auth/me) */
+  source?: string;
 }
 export interface PageResponse {
   columns: string[];
@@ -93,6 +97,13 @@ export function base64ToBytes(s: string): Uint8Array {
 
 class DataChanged extends Error {}
 
+/** the server now reads another data source than the one the copy was made from */
+export class SourceChangedError extends Error {
+  constructor() {
+    super("I dati del server sono cambiati: la copia sul dispositivo va scaricata di nuovo.");
+  }
+}
+
 /** Brings the copy in line with the server. The local tables must exist (prepareLocalDb). */
 export async function syncCopy(db: SqlExecutor, api: SyncApi, opts: { onProgress?: (p: SyncProgress) => void; now?: () => number } = {}): Promise<SyncReport> {
   try {
@@ -109,6 +120,9 @@ async function syncOnce(db: SqlExecutor, api: SyncApi, opts: { onProgress?: (p: 
   const now = opts.now ?? Date.now;
   const { tables } = await api.tables();
   const server = await api.counts();
+  // before anything is written: the copy must come from the same data source
+  const source = await getMeta(db, "source");
+  if (server.source != null && source != null && server.source !== source) throw new SourceChangedError();
   const report: SyncReport = { rows: 0, full: [], recounted: [], removed: [], ms: 0, dataTakenAt: server.dataTakenAt };
 
   // the tasks: one per table and device

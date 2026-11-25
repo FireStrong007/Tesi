@@ -132,7 +132,7 @@ describe.each(CASES)("isolation between participants ($app)", ({ app, codes }) =
       expect((await p.get(path)).status).toBe(403);
       expect((await anon.get(path)).status).toBe(401);
     }
-    expect((await p.post("/api/admin/accounts", { participantId: participants.get(codes[0])!.participantId })).status).toBe(403);
+    expect((await p.post("/api/admin/accounts", { participantId: participants.get(codes[0])!.participantId, code: codes[0] })).status).toBe(403);
   });
 
   it("the administrator's list has codes, devices and dates, but no health data, keys or tokens", async () => {

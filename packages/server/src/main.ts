@@ -9,7 +9,7 @@ import { DATASETS } from "@bridge/core/datasets";
 import { setValidDayHours } from "@bridge/core/metrics";
 import { createApp, ensureFirstAdmin } from "./app";
 import { LoginLimiter } from "./auth/limiter";
-import { AuthStore } from "./auth/store";
+import { AuthStore, SourceMismatchError } from "./auth/store";
 import { ConfigError, configSecrets, describeConfig, loadConfig } from "./config";
 import { ComparisonService, workerBuilder } from "./comparison/service";
 import { createDataSource } from "./data-source";
@@ -37,6 +37,17 @@ setValidDayHours(config.validDayHours);
 log.info("Avvio", describeConfig(config));
 
 const auth = new AuthStore(config.authDb, config.sessionIdleMs);
+// the accounts belong to one data source: another one is refused (npm run admin:accept-source)
+try {
+  auth.bindSource(config.source);
+} catch (e) {
+  if (e instanceof SourceMismatchError) {
+    log.error(e.message);
+    auth.close();
+    process.exit(1);
+  }
+  throw e;
+}
 await ensureFirstAdmin(auth, config, log);
 const data = createDataSource(config.data, DATASETS[config.app], log);
 await data.start();

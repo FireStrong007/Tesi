@@ -134,10 +134,31 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 - Accesso, cambio password obbligatorio al primo accesso, area amministratore (stato dei dati, partecipanti, creazione account, reimpostazione, disattivazione, registro).
 - Il service worker non salva mai in cache le risposte di `/api`.
 
+### Account legati al partecipante e alla sorgente dei dati (25 novembre)
+- **Problema trovato provando i dati reali:** un account era legato solo al numero del partecipante. Creato sui dati sintetici (SYN-G01 = numero 1) e usato con `DATA_FILE=data/gadgetbridge.db`, mostrava i dati reali del partecipante 1. In produzione sarebbe successo con un database del server ricreato o ripristinato con numeri diversi.
+- **Altri punti trovati con lo stesso difetto e corretti:**
+  - il confronto cercava il richiedente per numero nella cache: con numeri cambiati, la frase di riepilogo dava come «tuo valore» quello di un altro partecipante;
+  - la creazione di un account inviava solo il numero: se la copia dei dati cambiava tra l'elenco e il clic, l'account finiva sulla persona sbagliata;
+  - l'area amministratore abbinava account e partecipanti solo per numero.
+- **Ora:**
+  - ogni account salva numero **e codice** del partecipante. All'accesso, a ogni richiesta di dati o di confronto e nell'elenco dell'amministratore il server controlla che vadano ancora insieme nella copia in uso;
+  - se non vanno insieme: nessun dato, account «da verificare», avviso nell'area amministratore, voce nel registro (una volta sola). Torna attivo da solo se numero e codice tornano a corrispondere;
+  - **codice presente con un altro numero** (database ricreato): nell'area amministratore compare «Ricollega a [codice]». Lo fa solo l'amministratore, con un clic e una conferma, e finisce nel registro («numero 1 → 8»). Il partecipante viene disconnesso e la copia sul suo dispositivo riscaricata. **Codice sparito:** l'account resta bloccato;
+  - **account creati prima di questa correzione** (senza codice): «da ricreare», nessun dato, nessuna procedura di recupero;
+  - il **database degli account è legato alla sorgente dei dati**: impronta di app, modalità e percorso del file (o URL del backup). Su un'altra sorgente il server non parte e spiega perché. Se i dati sono gli stessi spostati altrove: `npm run admin:accept-source` (nel registro), dopo il quale gli account con numero e codice corrispondenti tornano attivi da soli;
+  - **senza `AUTH_DB`** il nome del file degli account dipende dai dati: `auth/vitabridge-synthetic-garmin-auth.db`, `auth/vitabridge-gadgetbridge-auth.db`, così sintetico e reale non si mescolano;
+  - **copia nel browser:** appartiene ad account + numero e codice del partecipante + sorgente dei dati. Se uno cambia viene cancellata e riscaricata; se il server legge un'altra sorgente la sincronizzazione non scrive niente. Con un account da verificare o da ricreare l'app mostra il motivo e cancella la copia dal dispositivo.
+- **Database dei dati:** mai scritto. Tutte le informazioni nuove stanno nel database degli account. A ogni `npm test` l'impronta (SHA-256) di ogni file in `data/` viene presa prima e dopo i test: un file cambiato o un file nuovo, come un `-wal`, fa fallire l'esecuzione. Ho verificato che fallisce davvero, puntando il controllo su una cartella temporanea.
+- **Provato nel browser** sull'app compilata:
+  - account creato sul database A, poi il server sul database B con i numeri invertiti: avvio rifiutato con il messaggio;
+  - dopo `admin:accept-source` il partecipante vede «Account da verificare» e la copia OPFS sparisce;
+  - l'amministratore vede «Ricollega a SYN-G01» e ricollega;
+  - il partecipante rientra e riceve i dati di SYN-G01 con il nuovo numero.
+
 ### Dati per lo sviluppo
 - `data/gadgetbridge.db` e `data/GimaDB.db`: copie reali, mai in git, aperte solo in sola lettura.
 - `npm run gen:synthetic` crea `data/synthetic-garmin.db` (8 partecipanti) e `data/synthetic-gima.db` (6), con gli schemi reali e alcune sezioni volutamente vuote. Con `-- --cohort N` si aggiungono N partecipanti Garmin con profili diversi (`SYN-C001`…): **servono per provare il confronto**, perché con i soli 8 predefiniti quasi tutti i giorni hanno meno di 5 altri partecipanti. Quello in `data/` oggi ha `--cohort 100`.
-- Per provare: copia `.env.example` in `.env`, imposta `ADMIN_PASSWORD`, poi `npm run dev`.
+- Per provare: copia `.env.example` in `.env`, imposta `ADMIN_PASSWORD`, poi `npm run dev`. Senza `AUTH_DB` ogni file di dati ha il suo file degli account; gli account creati prima del 25 novembre sono da ricreare (il vecchio `auth/vitabridge-auth.db` si può cancellare).
 
 ## Decisioni prese
 
@@ -152,6 +173,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 - **Obiettivi** sul server (`/api/me/settings`), **«Confronta» nascosto** fino alla Fase 4 (24 novembre).
 - **Distanza (regola B, 25 novembre):** si stima solo dove i passi non hanno nessuna distanza misurata dopo di loro nello stesso giorno: passi × passo medio della persona. Il passo medio si calcola dai suoi minuti coperti dalla distanza, se sono almeno 60 minuti e 1.000 passi; altrimenti vale il **valore predefinito di 75 cm**. Nell'interfaccia è indicata come «stimata» o «in parte stimata». È la stessa regola per tutti, anche nel confronto, perché sta nelle query di core.
 - **Sincronizzazione:** finestra di 3 giorni per tabella e per dispositivo, conteggi confrontati a ogni sincronizzazione (24 novembre).
+- **Account e sorgente dei dati (25 novembre):** numero e codice del partecipante controllati su ogni richiesta; ricollegamento solo dall'amministratore, con un clic; account senza codice da ricreare; database degli account legato alla sorgente, `admin:accept-source` per accettarne una spostata; copia del browser legata ad account, partecipante e sorgente.
 - **Confronto (Fase 4, 25 novembre):** parole «partecipante tipico (mediana)», «metà dei partecipanti», «media (n = …)»; il giorno in corso è escluso dal valore del periodo fino a mezzanotte; «Confronta» resta uno stato della pagina; il calcolo è sul server, con la cache precedente usata finché la nuova non è pronta.
 - **Frase di riepilogo (25 novembre):** solo sui giorni (settimane) confrontabili, detto nella frase; «Hai più minuti di circa 40 partecipanti su 100» con il verbo della metrica; messaggio esplicito quando nessun altro ha dati.
 

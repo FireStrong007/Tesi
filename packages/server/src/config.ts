@@ -3,7 +3,8 @@
  * Secrets (backup and admin passwords) are kept here and registered with the logger, which hides
  * them; describeConfig gives a summary without them.
  */
-import { isAbsolute, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, extname, isAbsolute, resolve } from "node:path";
 import { DATASETS, isAppId, type AppId } from "@bridge/core/datasets";
 import { MIN_USERS } from "@bridge/core/comparison/aggregate";
 import { DEFAULT_VALID_DAY_HOURS } from "@bridge/core/metrics";
@@ -25,6 +26,18 @@ export type DataConfig =
       timeoutSec: number;
     };
 
+/**
+ * Which research data an accounts database belongs to: the app, the mode and the file path or the
+ * backup URL. The accounts database keeps it (auth/store.ts) and the server refuses to start on
+ * another source, so that accounts made for one database never read another one.
+ */
+export interface DataSourceId {
+  /** SHA-256 of app, mode and location */
+  fingerprint: string;
+  /** for people: "file C:\…\synthetic-garmin.db" */
+  description: string;
+}
+
 export interface Config {
   app: AppId;
   host: string;
@@ -36,6 +49,8 @@ export interface Config {
   /** cookie with Secure and the __Host- prefix (default: when publicOrigin is https) */
   secureCookies: boolean;
   data: DataConfig;
+  /** the data source this server reads (the accounts database is bound to it) */
+  source: DataSourceId;
   authDb: string;
   /** first administrator, created at startup when there is none */
   admin: { username: string; password: string } | null;
@@ -91,24 +106,13 @@ export function loadConfig(env: NodeJS.ProcessEnv, baseDir = process.cwd()): Con
   if (origin.origin !== publicOrigin.replace(/\/$/, "")) throw new ConfigError(`PUBLIC_ORIGIN deve essere solo schema, host e porta, senza percorso: «${publicOrigin}»`);
   publicOrigin = origin.origin;
 
-  const mode = (env.DATA_MODE ?? "file").trim();
+  const where = dataLocation(env, baseDir);
   let data: DataConfig;
-  if (mode === "file") {
-    if (!env.DATA_FILE?.trim()) throw new ConfigError("Manca la variabile DATA_FILE (per provare: npm run gen:synthetic e DATA_FILE=data/synthetic-garmin.db)");
-    data = { mode, file: path(env.DATA_FILE.trim()) };
-  }
-  else if (mode === "backup") {
-    const url = required(env, "BACKUP_URL");
-    try {
-      const u = new URL(url);
-      if (u.username || u.password) throw new ConfigError("BACKUP_URL non deve contenere credenziali: usa BACKUP_USERNAME e BACKUP_PASSWORD");
-    } catch (e) {
-      if (e instanceof ConfigError) throw e;
-      throw new ConfigError("BACKUP_URL non è un indirizzo valido");
-    }
+  if (where.mode === "file") data = { mode: "file", file: where.location };
+  else {
     data = {
-      mode,
-      url,
+      mode: "backup",
+      url: where.location,
       username: required(env, "BACKUP_USERNAME"),
       password: required(env, "BACKUP_PASSWORD"),
       dir: path(env.BACKUP_DIR?.trim() || `backup/${app}`),
@@ -116,7 +120,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, baseDir = process.cwd()): Con
       minAgeMin: num(env, "SYNC_REFRESH_MIN_AGE_MIN", 5, 0),
       timeoutSec: num(env, "BACKUP_TIMEOUT_SEC", 300, 5),
     };
-  } else throw new ConfigError(`DATA_MODE deve essere file o backup (trovato «${mode}»)`);
+  }
 
   const adminUser = env.ADMIN_USERNAME?.trim();
   const adminPassword = env.ADMIN_PASSWORD;
@@ -149,13 +153,52 @@ const validDayHours = (env: NodeJS.ProcessEnv) => {
   return h;
 };
 
-/** Only what the accounts database needs (also used by the administrator commands, src/admin-cli.ts). */
-export function loadAuthConfig(env: NodeJS.ProcessEnv, baseDir = process.cwd()): Pick<Config, "app" | "authDb" | "sessionIdleMs"> {
+/** Where the research data are: the file (mode file) or the backup URL (mode backup), checked. */
+function dataLocation(env: NodeJS.ProcessEnv, baseDir: string): { mode: "file" | "backup"; location: string } {
+  const mode = (env.DATA_MODE ?? "file").trim();
+  if (mode === "file") {
+    const file = env.DATA_FILE?.trim();
+    if (!file) throw new ConfigError("Manca la variabile DATA_FILE (per provare: npm run gen:synthetic e DATA_FILE=data/synthetic-garmin.db)");
+    return { mode, location: isAbsolute(file) ? file : resolve(baseDir, file) };
+  }
+  if (mode === "backup") {
+    const url = required(env, "BACKUP_URL");
+    let u: URL;
+    try {
+      u = new URL(url);
+    } catch {
+      throw new ConfigError("BACKUP_URL non è un indirizzo valido");
+    }
+    if (u.username || u.password) throw new ConfigError("BACKUP_URL non deve contenere credenziali: usa BACKUP_USERNAME e BACKUP_PASSWORD");
+    return { mode, location: url };
+  }
+  throw new ConfigError(`DATA_MODE deve essere file o backup (trovato «${mode}»)`);
+}
+
+/** The identity of a data source (DataSourceId): the same file or URL gives the same fingerprint. */
+export function dataSourceId(app: AppId, mode: "file" | "backup", location: string): DataSourceId {
+  // paths: absolute; on Windows the case does not matter
+  const where = mode === "file" ? (process.platform === "win32" ? resolve(location).toLowerCase() : resolve(location)) : new URL(location).href;
+  return {
+    fingerprint: createHash("sha256").update([app, mode, where].join("|")).digest("hex"),
+    description: `${DATASETS[app].label}, ${mode === "file" ? `file ${resolve(location)}` : `backup da ${new URL(location).href}`}`,
+  };
+}
+
+/**
+ * Only what the accounts database needs (also used by the administrator commands, src/admin-cli.ts).
+ * Without AUTH_DB the file is named after the data: with DATA_FILE=data/synthetic-garmin.db it is
+ * auth/vitabridge-synthetic-garmin-auth.db, so that synthetic and real data never share accounts.
+ */
+export function loadAuthConfig(env: NodeJS.ProcessEnv, baseDir = process.cwd()): Pick<Config, "app" | "authDb" | "sessionIdleMs" | "source"> {
   const app = (env.APP ?? "vitabridge").trim();
   if (!isAppId(app)) throw new ConfigError(`APP deve essere vitabridge o heartbridge (trovato «${app}»)`);
-  const authDb = env.AUTH_DB?.trim() || `auth/${app}-auth.db`;
+  const where = dataLocation(env, baseDir);
+  const named = where.mode === "file" ? `${app}-${basename(where.location, extname(where.location)).replace(/[^\w.-]+/g, "-")}` : app;
+  const authDb = env.AUTH_DB?.trim() || `auth/${named}-auth.db`;
   return {
     app,
+    source: dataSourceId(app, where.mode, where.location),
     authDb: isAbsolute(authDb) ? authDb : resolve(baseDir, authDb),
     sessionIdleMs: {
       participant: num(env, "SESSION_IDLE_DAYS_PARTICIPANT", 30, 0.01) * 86_400_000,
@@ -184,6 +227,7 @@ export function describeConfig(c: Config) {
     secureCookies: c.secureCookies,
     data: c.data.mode === "file" ? { mode: "file", file: c.data.file } : { mode: "backup", url: c.data.url, dir: c.data.dir, intervalMin: c.data.intervalMin, minAgeMin: c.data.minAgeMin },
     authDb: c.authDb,
+    source: c.source.description,
     validDayHours: c.validDayHours,
     compareMinParticipants: c.compareMinParticipants,
     sessionIdle: { participantDays: c.sessionIdleMs.participant / 86_400_000, adminHours: c.sessionIdleMs.admin / 3_600_000 },

@@ -122,12 +122,12 @@ describe("origin and CSRF", () => {
     const a = s.client();
     await a.login(ADMIN.username, ADMIN.password);
     const { body } = await a.get<{ participants: ParticipantRow[] }>("/api/admin/participants");
-    const pid = body.participants[0].id;
-    expect((await a.req("POST", "/api/admin/accounts", { participantId: pid }, { "x-csrf-token": "sbagliato" })).status).toBe(403);
+    const named = { participantId: body.participants[0].id, code: body.participants[0].code };
+    expect((await a.req("POST", "/api/admin/accounts", named, { "x-csrf-token": "sbagliato" })).status).toBe(403);
     const noToken = s.client();
     noToken.cookie = a.cookie;
-    expect((await noToken.post("/api/admin/accounts", { participantId: pid })).status).toBe(403);
-    expect((await a.post("/api/admin/accounts", { participantId: pid })).status).toBe(201);
+    expect((await noToken.post("/api/admin/accounts", named)).status).toBe(403);
+    expect((await a.post("/api/admin/accounts", named)).status).toBe(201);
   });
 });
 
@@ -140,13 +140,13 @@ describe("accounts of participants", () => {
     const p = list.body.participants.find((x) => x.code === "SYN-G02")!;
     expect(p.account).toBeNull();
     expect(p.suggestedUsername).toBe("syn-g02");
-    const created = await admin.post<{ temporaryPassword: string; account: { username: string } }>("/api/admin/accounts", { participantId: p.id });
+    const created = await admin.post<{ temporaryPassword: string; account: { username: string } }>("/api/admin/accounts", { participantId: p.id, code: p.code });
     expect(created.status).toBe(201);
     const temp = created.body.temporaryPassword;
     expect(temp).toMatch(/^[A-Za-z2-9]{12}$/);
     // never again: not in the list, not in the audit log, not in the status
     for (const path of ["/api/admin/participants", "/api/admin/audit", "/api/admin/status"]) expect((await admin.get(path)).text).not.toContain(temp);
-    expect((await admin.post("/api/admin/accounts", { participantId: p.id })).status).toBe(409);
+    expect((await admin.post("/api/admin/accounts", { participantId: p.id, code: p.code })).status).toBe(409);
 
     const user = s.client();
     const first = await user.login("syn-g02", temp);

@@ -7,11 +7,22 @@ import { setValidDayHours } from "@bridge/core/metrics";
 import { ApiError, apiGet, apiPost, setCsrfToken, setUnauthenticatedHandler } from "@/lib/api";
 
 export interface Me {
-  account: { username: string; role: "participant" | "admin"; mustChangePassword: boolean; participantId?: number };
+  account: {
+    username: string;
+    role: "participant" | "admin";
+    mustChangePassword: boolean;
+    /** participants: the participant the account names, by id and code */
+    participantId?: number;
+    participantCode?: string | null;
+    /** participants: ok, «da verificare» or «da ricreare» (no data) */
+    link?: "ok" | "review" | "recreate";
+  };
   csrfToken: string;
   app: { id: "vitabridge" | "heartbridge"; label: string };
   /** the rules the server computes with: the app follows the same ones */
   study: { timeZone: string; validDayHours: number };
+  /** the server's data source (a fingerprint): the device's copy belongs to it */
+  source: string;
 }
 
 /** run at logout before anything else (the participant's copy is erased from the device) */
@@ -40,7 +51,7 @@ const AuthContext = createContext<AuthApi | null>(null);
 const CACHE_KEY = "bridge.me";
 const cacheMe = (me: Me | null) => {
   try {
-    if (me && me.account.role === "participant") localStorage.setItem(CACHE_KEY, JSON.stringify({ account: me.account, app: me.app, study: me.study }));
+    if (me && me.account.role === "participant" && me.account.link === "ok") localStorage.setItem(CACHE_KEY, JSON.stringify({ account: me.account, app: me.app, study: me.study, source: me.source }));
     else localStorage.removeItem(CACHE_KEY);
   } catch {
     /* storage not available: no offline start */
@@ -49,7 +60,9 @@ const cacheMe = (me: Me | null) => {
 const cachedMe = (): Me | null => {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
-    return raw ? { ...JSON.parse(raw), csrfToken: "" } : null;
+    const me = raw ? ({ ...JSON.parse(raw), csrfToken: "" } as Me) : null;
+    // saved by an older version (without the data source): no offline start
+    return me?.source && me.account.participantCode ? me : null;
   } catch {
     return null;
   }

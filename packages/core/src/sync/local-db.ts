@@ -4,7 +4,8 @@
  * tables (activity_sample, sleep_session, …) are built from them by core's adapter
  * (createAppTables), the same code the server and the tests use.
  *
- * The copy belongs to one person of one app (meta.owner): another login wipes it first.
+ * The copy belongs to one account of one app, naming one participant (id and code) of one data
+ * source (meta.owner, CopyOwner): if any of them changes, it is wiped and downloaded again.
  */
 import { DATASETS, type AppId } from "../datasets";
 import type { SqlExecutor } from "../db/sql";
@@ -43,21 +44,48 @@ export async function getMeta(db: SqlExecutor, key: string): Promise<string | nu
 }
 export const setMeta = (db: SqlExecutor, key: string, value: string) => db.run("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [key, value]);
 
-/** who the copy belongs to */
-export const ownerOf = (app: AppId, username: string) => `${app}:${username}`;
+/** whose the copy is: the account, the participant it names (id and code) and the data source */
+export interface CopyOwner {
+  app: AppId;
+  username: string;
+  participantId: number;
+  participantCode: string;
+  /** the server's data source (a fingerprint, /api/auth/me): another source, another copy */
+  source: string;
+}
+export const ownerKey = (o: CopyOwner) => JSON.stringify([o.app, o.username, o.participantId, o.participantCode, o.source]);
 
 /**
  * Creates the tables of a copy for `owner`. Returns false when the database belongs to someone
- * else (or to another schema version): the caller must wipe it and call again.
+ * else, to another participant or data source, or to another schema version: the caller must wipe
+ * it and call again.
  */
-export async function prepareLocalDb(db: SqlExecutor, app: AppId, owner: string): Promise<boolean> {
+export async function prepareLocalDb(db: SqlExecutor, owner: CopyOwner): Promise<boolean> {
   const tables = await db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'");
   if (tables.length) {
-    if ((await getMeta(db, "owner")) !== owner || (await getMeta(db, "schema_version")) !== String(LOCAL_SCHEMA_VERSION)) return false;
+    if ((await getMeta(db, "owner")) !== ownerKey(owner) || (await getMeta(db, "schema_version")) !== String(LOCAL_SCHEMA_VERSION)) return false;
   }
-  await db.batch([...OWN_TABLES, ...dataTableStatements(app)].map((sql) => ({ sql })));
-  await setMeta(db, "owner", owner);
+  await db.batch([...OWN_TABLES, ...dataTableStatements(owner.app)].map((sql) => ({ sql })));
+  await setMeta(db, "owner", ownerKey(owner));
+  await setMeta(db, "source", owner.source);
   await setMeta(db, "schema_version", String(LOCAL_SCHEMA_VERSION));
+  return true;
+}
+
+/** Empties a copy in place: every table dropped (the browser's worker instead deletes the file). */
+export async function wipeLocalDb(db: SqlExecutor) {
+  const all = await db.all<{ name: string; type: string }>("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'");
+  await db.batch(all.map((t) => ({ sql: `DROP ${t.type === "view" ? "VIEW" : "TABLE"} IF EXISTS "${t.name.replace(/"/g, '""')}"` })));
+}
+
+/**
+ * The copy ready for `owner`: kept if it is theirs, otherwise wiped (`wipe`, default wipeLocalDb)
+ * and prepared again. Returns whether it was wiped.
+ */
+export async function openOwnedCopy(db: SqlExecutor, owner: CopyOwner, wipe: () => Promise<void> = () => wipeLocalDb(db)): Promise<boolean> {
+  if (await prepareLocalDb(db, owner)) return false;
+  await wipe();
+  if (!(await prepareLocalDb(db, owner))) throw new Error("La copia locale non si è potuta svuotare");
   return true;
 }
 
