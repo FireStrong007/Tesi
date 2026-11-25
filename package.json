@@ -20,7 +20,8 @@
     "dev:web": "npm run dev -w @bridge/web --",
     "dev:server": "npm run dev -w @bridge/server",
     "admin:create": "tsx packages/server/src/admin-cli.ts create",
-    "admin:reset-password": "tsx packages/server/src/admin-cli.ts reset-password"
+    "admin:reset-password": "tsx packages/server/src/admin-cli.ts reset-password",
+    "measure:compare": "tsx packages/server/src/comparison/measure.ts"
   },
   "devDependencies": {
     "@types/node": "^22.16.0",

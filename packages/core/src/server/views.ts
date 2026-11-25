@@ -22,7 +22,7 @@ import { ActivityKind, NOT_MEASURED } from "./schema";
  * measured, gap rows and NOT_WORN rows. The app's activity_sample holds per-minute values:
  *  - not worn rows are left out, -1 becomes NULL;
  *  - the value of a minute is the counter minus the previous measured counter of the same local
- *    day (LAG over the measured rows only); the first measured value of a day is the counter itself
+ *    day (the measured rows only, -1 rows skipped); the first measured value of a day is the counter itself
  *    (counters restart at midnight); a counter that goes down gives NULL and becomes the new base;
  *  - like the app's importer (and Gadgetbridge when it reads), the counter read at t covers the
  *    minute before it: rows move to t - 60, so the sample at midnight closes the previous day;
@@ -37,33 +37,29 @@ const COUNTERS = [
   ["ACTIVE_CALORIES", "active_calories"],
 ] as const;
 
-// One pass, no joins (the counters are measured independently, so "the previous measured value"
-// differs per column). SQLite's LAG cannot skip -1 rows, hence: g = running count of measured
-// values (each measured row starts a group), v = the measured value of the row's group, and the
-// previous measured value of a measured row is v of the row just before it (group g - 1).
+// One sort, no joins. The counters are measured independently, so "the previous measured value"
+// differs per column, and SQLite's LAG cannot skip -1 rows. Instead: the latest measured row before
+// this one has the highest TIMESTAMP, so MAX(TIMESTAMP * 2^31 + value) over the earlier rows of the
+// day packs it, and the value is the remainder (counters of a day stay far below 2^31, TIMESTAMP
+// below 2^32 until 2106). Every window has the same partition and order: SQLite sorts once.
+const PACK = 2147483648;
 const ACTIVITY_VIEW: LocalView = { name: "activity_sample", select: (from) => `
 SELECT DEVICE_ID AS device_id, USER_ID AS user_id, TIMESTAMP - 60 AS timestamp,
   NULL AS activity_type,
   NULLIF(RAW_INTENSITY, ${NOT_MEASURED}) AS intensity,
-  ${COUNTERS.map(([c, ours]) => `CASE WHEN ${c} < 0 THEN NULL WHEN p_${c} IS NULL THEN ${c} WHEN ${c} >= p_${c} THEN ${c} - p_${c} END AS ${ours}`).join(", ")},
+  ${COUNTERS.map(([c, ours]) => `CASE WHEN ${c} < 0 THEN NULL WHEN p_${c} IS NULL THEN ${c} WHEN ${c} >= p_${c} % ${PACK} THEN ${c} - p_${c} % ${PACK} END AS ${ours}`).join(", ")},
   NULLIF(HEART_RATE, ${NOT_MEASURED}) AS heart_rate,
   CASE WHEN last_distance IS NULL OR TIMESTAMP > last_distance THEN 1 ELSE 0 END AS distance_missing
 FROM (
-  SELECT *, ${COUNTERS.map(([c]) => `LAG(v_${c}) OVER w AS p_${c}`).join(", ")},
-    MAX(CASE WHEN DISTANCE_CM >= 0 THEN TIMESTAMP END) OVER (PARTITION BY USER_ID, DEVICE_ID, day) AS last_distance
+  SELECT *, ${COUNTERS.map(([c]) => `MAX(CASE WHEN ${c} >= 0 THEN TIMESTAMP * ${PACK} + ${c} END) OVER earlier AS p_${c}`).join(", ")},
+    MAX(CASE WHEN DISTANCE_CM >= 0 THEN TIMESTAMP END) OVER whole AS last_distance
   FROM (
-    SELECT *, ${COUNTERS.map(([c]) => `MAX(CASE WHEN ${c} >= 0 THEN ${c} END) OVER (PARTITION BY USER_ID, DEVICE_ID, day, g_${c}) AS v_${c}`).join(", ")}
-    FROM (
-      SELECT *, ${COUNTERS.map(([c]) => `SUM(${c} >= 0) OVER w AS g_${c}`).join(", ")}
-      FROM (
-        SELECT USER_ID, DEVICE_ID, TIMESTAMP, RAW_INTENSITY, HEART_RATE, STEPS, DISTANCE_CM, ACTIVE_CALORIES,
-          date(TIMESTAMP - 60 + (SELECT o FROM tz_offset WHERE t <= TIMESTAMP - 60 ORDER BY t DESC LIMIT 1), 'unixepoch') AS day
-        FROM GARMIN_ACTIVITY_SAMPLE WHERE RAW_KIND <> ${ActivityKind.NOT_WORN}${from == null ? "" : ` AND TIMESTAMP - 60 >= ${from}`}
-      )
-      WINDOW w AS (PARTITION BY USER_ID, DEVICE_ID, day ORDER BY TIMESTAMP ROWS UNBOUNDED PRECEDING)
-    )
+    SELECT USER_ID, DEVICE_ID, TIMESTAMP, RAW_INTENSITY, HEART_RATE, STEPS, DISTANCE_CM, ACTIVE_CALORIES,
+      date(TIMESTAMP - 60 + (SELECT o FROM tz_offset WHERE t <= TIMESTAMP - 60 ORDER BY t DESC LIMIT 1), 'unixepoch') AS day
+    FROM GARMIN_ACTIVITY_SAMPLE WHERE RAW_KIND <> ${ActivityKind.NOT_WORN}${from == null ? "" : ` AND TIMESTAMP - 60 >= ${from}`}
   )
-  WINDOW w AS (PARTITION BY USER_ID, DEVICE_ID, day ORDER BY TIMESTAMP)
+  WINDOW earlier AS (PARTITION BY USER_ID, DEVICE_ID, day ORDER BY TIMESTAMP ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+    whole AS (PARTITION BY USER_ID, DEVICE_ID, day ORDER BY TIMESTAMP ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
 )` };
 
 /** A millisecond table shown as a seconds one: `cols` maps our column to the server expression. */

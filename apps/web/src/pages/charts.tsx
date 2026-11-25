@@ -45,7 +45,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useQuery } from "@/hooks/use-query";
 import {
-  MIN_USERS,
+  NOT_ENOUGH_PARTICIPANTS,
   WEEKLY_METRICS,
   COMPARE_AVAILABLE,
   getComparisonSource,
@@ -56,8 +56,9 @@ import {
   weeksCovering,
   type CompareMetric,
   type DailyDistribution,
-  type PeriodStanding,
+  type ServerStanding,
 } from "@/lib/comparison";
+import { ApiError } from "@/lib/api";
 import { loadDay, type DayData } from "@bridge/core/day-data";
 import { addDays, sleepTotal, startOfDay } from "@bridge/core/db/queries";
 import { estimatedLabel, fmtDay, fmtDayLong, fmtDayMonth, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
@@ -704,13 +705,13 @@ function RangeView({
   const canCompare = COMPARE_AVAILABLE && !!cfg && !!base && (!cfg.onlyWithData || base.hasData);
   const active = compare && canCompare;
   const source = active ? getComparisonSource() : null;
-  const query = { excludeUserId: String(user.id) };
-  const { data: dist } = useQuery<DailyDistribution[] | null>(
+  // the server leaves the asking participant out by itself (from the session)
+  const { data: dist, error: compareError } = useQuery<DailyDistribution[] | null>(
     () =>
       active && cfg && source
         ? WEEKLY_METRICS.has(cfg.metric)
-          ? source.weeklyDistribution(cfg.metric, from, to, query)
-          : source.dailyDistribution(cfg.metric, from, to, query)
+          ? source.weeklyDistribution(cfg.metric, from, to)
+          : source.dailyDistribution(cfg.metric, from, to)
         : Promise.resolve(null),
     [active, cfg?.metric, from, to, user.id],
   );
@@ -720,9 +721,10 @@ function RangeView({
   const now = Math.floor(Date.now() / 1000);
   const mineDaily = useMemo(() => (mineRange && cfg ? userDailyValues(cfg.metric, mineRange) : null), [mineRange, cfg]);
   const minePeriod = mineDaily && cfg && mineRange ? periodValue(cfg.metric, mineRange.days, mineDaily, now) : null;
-  const { data: standing } = useQuery<PeriodStanding | null>(
-    () => (active && cfg && minePeriod && source ? source.periodStanding(cfg.metric, from, to, minePeriod.value, query) : Promise.resolve(null)),
-    [active, cfg?.metric, from, to, user.id, minePeriod?.value],
+  // the standing and the participant's own period value both come from the server's data
+  const { data: standing } = useQuery<ServerStanding | null>(
+    () => (active && cfg && source ? source.periodStanding(cfg.metric, from, to) : Promise.resolve(null)),
+    [active, cfg?.metric, from, to, user.id],
   );
   // comparing adds the overlay, and the details go to a panel under the chart instead of the
   // tooltip; the bars keep their meaning, except sleep, where the awake time is not stacked so that
@@ -754,6 +756,7 @@ function RangeView({
           dist: others,
           standing: standing ?? null,
           minePeriod,
+          error: compareError,
           span: weeks
             ? `${fmtMonth(range.from)}, ${weeks.filter((w) => w.end <= startOfDay(now)).length} settimane complete`
             : period === "month"
@@ -763,7 +766,7 @@ function RangeView({
       : null;
   const info =
     cmp && cfg && mine
-      ? (i: number) => compareInfo(cfg, { item: items[i], partial: !!items[i].partial, weekly, mine: mine[i], others: others?.[i], goal: view.goal, color: mineColor ?? items[i].color ?? "var(--foreground)", barFormat: view.valueFormat ?? view.axis })
+      ? (i: number) => compareInfo(cfg, { item: items[i], partial: !!items[i].partial, weekly, mine: mine[i], others: others?.[i], goal: view.goal, color: mineColor ?? items[i].color ?? "var(--foreground)", barFormat: view.valueFormat ?? view.axis, minParticipants: source?.minParticipants ?? 5 })
       : undefined;
   // the panel starts on the last complete day with data
   let lastWithData = items.length - 1;
@@ -848,7 +851,7 @@ function CompareButton({ on, onToggle }: { on: boolean; onToggle: () => void }) 
       size="sm"
       aria-pressed={on}
       onClick={onToggle}
-      title="Confronta con la media degli altri utenti"
+      title="Confronta con gli altri partecipanti"
       className={cn("h-8", on && "border-compare bg-compare/10 text-compare hover:bg-compare/15 hover:text-compare dark:border-compare dark:bg-compare/15")}
     >
       <UsersIcon />
@@ -858,8 +861,9 @@ function CompareButton({ on, onToggle }: { on: boolean; onToggle: () => void }) 
 }
 
 /**
- * The panel under the chart while comparing, for one bar: the day, the user's value, the others'
- * median ("utente tipico") and central half (25th–75th percentile) with how many they are.
+ * The panel under the chart while comparing, for one bar: the day, the participant's value, the
+ * others' median ("partecipante tipico"), central half (25th–75th percentile) and mean with how
+ * many they are.
  */
 function compareInfo(
   cfg: CompareConfig,
@@ -874,6 +878,7 @@ function compareInfo(
     goal?: number;
     color: string;
     barFormat: (v: number) => string;
+    minParticipants: number;
   },
 ): InfoContent {
   const { item, mine, others } = a;
@@ -904,13 +909,12 @@ function compareInfo(
       ? { label: "Settimana", value: `${fmtDayMonth(day)} – ${fmtDayMonth(addDaysLocal(day, 6))}` }
       : { label: "Giorno", value: fmtDayTitle(day) },
     { label: cfg.mineLabel ?? "Tu", color: a.color, value: mine != null ? cfg.fmt(mine) : "–", suffix: mine == null ? (item.value > 0 ? "pochi giorni validi" : "nessun dato") : reached ? "obiettivo raggiunto" : undefined, notes },
-    { label: "Utente tipico", color: "var(--compare)", value: loading ? "…" : enough ? cfg.fmt(others.median!) : "–" },
-    {
-      label: "Metà degli utenti",
-      value: loading ? "…" : enough ? `${cfg.fmt(others.p25!)} – ${cfg.fmt(others.p75!)}` : "–",
-      suffix: loading ? undefined : enough ? `(${others.n} utenti)` : others.n ? `(${others.n} utenti, ne servono ${MIN_USERS})` : "nessun dato",
-    },
-  ] };
+    { label: "Partecipante tipico (mediana)", color: "var(--compare)", value: loading ? "…" : enough ? cfg.fmt(others.median!) : "–" },
+    { label: "Metà dei partecipanti", value: loading ? "…" : enough ? `${cfg.fmt(others.p25!)} – ${cfg.fmt(others.p75!)}` : "–" },
+    { label: enough ? `Media (n = ${others.n})` : "Media", value: loading ? "…" : enough && others.mean != null ? cfg.fmt(others.mean) : "–" },
+  ],
+  // fewer than the minimum of others with data that day (a.minParticipants, from the server)
+  ...(!loading && !enough ? { message: `${NOT_ENOUGH_PARTICIPANTS}${others?.n ? ` (${others.n} con dati, ne servono ${a.minParticipants})` : ""}.` } : {}) };
 }
 
 /**
@@ -921,13 +925,16 @@ function comparisonView(
   cfg: CompareConfig,
   a: {
     dist: DailyDistribution[] | null;
-    standing: PeriodStanding | null;
+    standing: ServerStanding | null;
     minePeriod: { value: number | null; days: number };
     span: string;
+    error: Error | null;
   },
 ) {
   const { dist, standing } = a;
-  const legend: LegendItem = { label: "Utente tipico (mediana) e metà centrale degli altri utenti", color: "var(--compare)", kind: "band" };
+  const legend: LegendItem = { label: "Partecipante tipico (mediana) e metà centrale degli altri partecipanti", color: "var(--compare)", kind: "band" };
+  if (a.error)
+    return { overlay: undefined, legend, summary: a.error instanceof ApiError && a.error.status === 0 ? "Il confronto richiede la connessione." : a.error.message, top: null };
   if (!dist) return { overlay: undefined, legend, summary: "Caricamento del confronto…", top: null };
   const overlay: BarOverlay = {
     values: dist.map((d) => d.median),
@@ -940,7 +947,8 @@ function comparisonView(
     overlay,
     legend,
     summary: standing
-      ? summarySentence({ span: a.span, mine: a.minePeriod.value, myDays: a.minePeriod.days, standing, text: cfg.text, fmt: cfg.fmt })
+      ? // the participant's own value as the server computed it, from the same data as the others'
+        summarySentence({ span: a.span, mine: standing.mine.value, myDays: standing.mine.days, standing, text: cfg.text, fmt: cfg.fmt })
       : "Caricamento del confronto…",
     top: highs.length ? Math.max(...highs) : null,
   };

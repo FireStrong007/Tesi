@@ -6,7 +6,7 @@
  */
 import { addDays } from "../db/queries";
 import { MIN_VALID_DAYS } from "../metrics";
-import { distributionOfUsers, standingAmong, type PeriodStanding } from "./aggregate";
+import { MIN_USERS, distributionOfUsers, standingAmong, type PeriodStanding } from "./aggregate";
 import { periodValue, weeklyTotal, weeksCovering } from "./daily-values";
 import type { CompareMetric, ComparisonQuery, ComparisonSource, DailyDistribution } from "./types";
 
@@ -19,9 +19,12 @@ export function daysOf(from: number, to: number) {
 export abstract class CohortSource implements ComparisonSource {
   abstract readonly sample: boolean;
   protected now: () => number;
+  /** fewest people with data for any aggregate (aggregate.MIN_USERS unless configured) */
+  readonly minUsers: number;
 
-  constructor(now?: () => number) {
+  constructor(now?: () => number, minUsers = MIN_USERS) {
     this.now = now ?? (() => Math.floor(Date.now() / 1000));
+    this.minUsers = minUsers;
   }
 
   /**
@@ -33,7 +36,7 @@ export abstract class CohortSource implements ComparisonSource {
   async dailyDistribution(metric: CompareMetric, from: number, to: number, query: ComparisonQuery = {}): Promise<DailyDistribution[]> {
     const days = daysOf(from, to);
     const values = await this.valuesOf(metric, days, query);
-    return days.map((day, i) => ({ day, ...distributionOfUsers(values.map((v) => v[i])) }));
+    return days.map((day, i) => ({ day, ...distributionOfUsers(values.map((v) => v[i]), this.minUsers) }));
   }
 
   async weeklyDistribution(metric: CompareMetric, from: number, to: number, query: ComparisonQuery = {}): Promise<DailyDistribution[]> {
@@ -41,7 +44,7 @@ export abstract class CohortSource implements ComparisonSource {
     const days = daysOf(weeks[0].start, weeks[weeks.length - 1].end);
     const now = this.now();
     const values = await this.valuesOf(metric, days, query);
-    return weeks.map((w) => ({ day: w.start, ...distributionOfUsers(values.map((v) => weeklyTotal(days, v, w, now))) }));
+    return weeks.map((w) => ({ day: w.start, ...distributionOfUsers(values.map((v) => weeklyTotal(days, v, w, now)), this.minUsers) }));
   }
 
   async periodStanding(metric: CompareMetric, from: number, to: number, mine: number | null, query: ComparisonQuery = {}): Promise<PeriodStanding> {
@@ -53,6 +56,6 @@ export abstract class CohortSource implements ComparisonSource {
       const p = periodValue(metric, days, v, now);
       return p.days >= MIN_VALID_DAYS ? p.value : null;
     });
-    return standingAmong(perPerson, mine);
+    return standingAmong(perPerson, mine, this.minUsers);
   }
 }

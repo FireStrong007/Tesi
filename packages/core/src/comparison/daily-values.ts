@@ -129,14 +129,16 @@ export function weeklyTotal(days: number[], values: (number | null)[], week: { s
  * every other user.
  */
 export function periodValue(metric: CompareMetric, days: number[], values: (number | null)[], now: number): { value: number | null; days: number } {
-  const validDays = values.filter((v) => v != null).length;
+  // today is not over: it counts only from midnight (the same for the user and the others)
+  const today = startOfDay(now);
+  const done = values.map((v, i) => (days[i] < today ? v : null));
+  const validDays = done.filter((v) => v != null).length;
   let xs: number[];
   if (WEEKLY_METRICS.has(metric)) {
-    const today = startOfDay(now);
     xs = weeksCovering(days[0], addDays(days[days.length - 1], 1))
       .filter((w) => w.end <= today)
       .map((w) => weeklyTotal(days, values, w, now))
       .filter((v): v is number => v != null);
-  } else xs = values.filter((v): v is number => v != null);
+  } else xs = done.filter((v): v is number => v != null);
   return { value: xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null, days: validDays };
 }

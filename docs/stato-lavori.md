@@ -18,8 +18,8 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 | 1. Workspace (`packages/core`, `apps/web`) | fatta |
 | 2. Server di lettura, login, amministrazione | fatta, con i comandi per gli amministratori |
 | 3. VitaBridge sui dati del server | fatta |
-| 4. Confronto con gli altri partecipanti | **prossima** |
-| 5. HeartBridge | da fare |
+| 4. Confronto con gli altri partecipanti | fatta |
+| 5. HeartBridge | **prossima** |
 | 6. Pubblicazione e documentazione | da fare |
 
 ## Cosa c'è oggi
@@ -59,7 +59,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
   - stati vuoti per sezione («Il tuo bracciale non ha ancora registrato…»);
   - Dispositivi informativa (batteria, ultima misura, ultimo caricamento);
   - Impostazioni con account, obiettivi, tema e copia locale.
-- **«Confronta»:** nascosto fino alla Fase 4.
+- **«Confronta»:** vedi la Fase 4.
 - **Altro:**
   - senza connessione si vedono i dati già scaricati;
   - in http da un indirizzo di rete l'app chiede l'indirizzo https;
@@ -74,6 +74,29 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 | «Sincronizza»: finestre + ricostruzione parziale | 0,4 + 0,3 s | 0,55 + 0,3 s* |
 
 \* DevTools non può rallentare i worker («Operation is only supported for pages, not workers»): il rallentamento vale solo per la pagina, mentre la costruzione delle tabelle (nel worker) gira alla velocità del PC. Su un telefono 4–6 volte più lento la costruzione del primo accesso sarebbe di circa 9–13 s (una volta sola, con la barra di avanzamento) e quella dopo «Sincronizza» di 1–2 s, con i dati già sullo schermo. Per misurarlo su un telefono vero: Chrome per Android con il debug remoto, `performance.getEntriesByType("measure")` (voci `bridge:open`, `bridge:sync`, `bridge:rebuild`).
+
+### Confronto con gli altri partecipanti (Fase 4)
+- **Dove si calcola:** sul server, mai nel browser. Il server tiene in memoria una cache con i valori giornalieri di ogni partecipante (passi, sonno, stress, battito a riposo, intensità, …), calcolati con le stesse query di core che usa l'app.
+  - La cache si ricostruisce in un worker separato quando arriva una nuova copia dei dati; la copia viene collegata in sola lettura (`immutable=1`) e resta identica byte per byte.
+  - **Durante la ricostruzione il server risponde con la cache precedente** e la sostituisce solo quando la nuova è pronta (test `compare.test.ts`: con la seconda ricostruzione ferma, le risposte restano quelle della prima; dopo, cambiano). Se la ricostruzione fallisce, resta la cache precedente.
+- **Endpoint** (solo partecipanti): `/api/compare/daily`, `/api/compare/weekly` (intensità, settimane lunedì–domenica), `/api/compare/standing` (frase di riepilogo). Il partecipante che chiede viene escluso dagli altri in base alla sessione, non a un parametro. Le risposte contengono solo aggregati: mediana, 25° e 75° percentile, media, n. L'amministratore vede solo lo stato della cache (`/api/admin/status`), nessun valore.
+- **Soglia:** sotto `COMPARE_MIN_PARTICIPANTS` altri partecipanti con dati (predefinita 5, non meno di 5) non si mostra niente, solo «Non ci sono abbastanza partecipanti per un confronto (N con dati, ne servono M)».
+- **Giorno valido:** la stessa regola delle 12 ore vale per tutti; il giorno in corso non entra nel valore del periodo (frase di riepilogo) fino a mezzanotte.
+- **Nell'app:** «Confronta» è di nuovo visibile, resta uno stato della pagina; nel pannello sotto il grafico «Partecipante tipico (mediana)», «Metà dei partecipanti», «Media (n = …)». Senza connessione: «Il confronto richiede la connessione.»
+- **Corretto:** in sviluppo (StrictMode di React) si creavano due worker SQLite sulla stessa copia OPFS, con errori in console; ora c'è un solo client per pagina (`sharedDbClient`).
+
+### Tempi e memoria della ricostruzione della cache (`npm run measure:compare -- <database>`)
+| | dati reali (`data/gadgetbridge.db`: 7 partecipanti, 855 giorni-persona) | sintetici `--cohort 100` (108 partecipanti, 3.071 giorni-persona) |
+|---|---|---|
+| Prima dell'ottimizzazione | 4,9 s, picco 123 MB | 58,6 s (tabelle 38,4 s), picco 277 MB |
+| **Dopo** | **2,2 s** (tabelle 0,7 + persone 1,5) | **28,0 s** (tabelle 12,8 + persone 15,1) |
+| Memoria (RSS) prima / picco / dopo | 52 / 104 / 99 MB | 70 / 278 / 273 MB |
+| Dimensione della cache | 0,18 MB | 0,89 MB |
+
+- L'ottimizzazione riguarda la vista dell'attività (contatori → valori al minuto): un solo ordinamento invece di finestre annidate. Tutti i test, compresa la verifica con l'export, danno gli stessi valori. Rende più veloce anche la prima costruzione delle tabelle nel browser.
+- Nel worker del server (18 partecipanti sintetici): 3,1 s con la build, 3,5 s con `npm run dev`.
+- La memoria dopo la costruzione è quella del processo di misura; nel server il worker termina a ogni ricostruzione e resta solo la cache.
+- Il database `--cohort 100` (175 MB) si genera in circa 60 s.
 
 ### Verifica dei calcoli con il tuo export
 - I valori del codice `legacy-bluetooth`, calcolati dai FIT dello zip, e quelli del nuovo adattatore, calcolati dal database Gadgetbridge dello stesso zip (solo `DEVICE_ID = 4`), **coincidono in tutto** dal 3 al 6 novembre:
@@ -100,7 +123,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 
 ### Dati per lo sviluppo
 - `data/gadgetbridge.db` e `data/GimaDB.db`: copie reali, mai in git, aperte solo in sola lettura.
-- `npm run gen:synthetic` crea `data/synthetic-garmin.db` (8 partecipanti) e `data/synthetic-gima.db` (6), con gli schemi reali e alcune sezioni volutamente vuote.
+- `npm run gen:synthetic` crea `data/synthetic-garmin.db` (8 partecipanti) e `data/synthetic-gima.db` (6), con gli schemi reali e alcune sezioni volutamente vuote. Con `-- --cohort N` si aggiungono N partecipanti Garmin con profili diversi (`SYN-C001`…), utili per provare il confronto.
 - Per provare: copia `.env.example` in `.env`, imposta `ADMIN_PASSWORD`, poi `npm run dev`.
 
 ## Decisioni prese
@@ -116,10 +139,11 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 - **Obiettivi** sul server (`/api/me/settings`), **«Confronta» nascosto** fino alla Fase 4 (24 novembre).
 - **Distanza (regola B, 25 novembre):** si stima solo dove i passi non hanno nessuna distanza misurata dopo di loro nello stesso giorno: passi × passo medio della persona. Il passo medio si calcola dai suoi minuti coperti dalla distanza, se sono almeno 60 minuti e 1.000 passi; altrimenti vale il **valore predefinito di 75 cm**. Nell'interfaccia è indicata come «stimata» o «in parte stimata». È la stessa regola per tutti, anche nel confronto, perché sta nelle query di core.
 - **Sincronizzazione:** finestra di 3 giorni per tabella e per dispositivo, conteggi confrontati a ogni sincronizzazione (24 novembre).
+- **Confronto (Fase 4, 25 novembre):** parole «partecipante tipico (mediana)», «metà dei partecipanti», «media (n = …)»; il giorno in corso è escluso dal valore del periodo fino a mezzanotte; «Confronta» resta uno stato della pagina; il calcolo è sul server, con la cache precedente usata finché la nuova non è pronta.
 
 ### Lavoro precedente (ancora valide)
 - **Mezzanotte nel formato del server:** si mantiene il comportamento di Gadgetbridge (i totali di mezzanotte possono essere sovrascritti dal file successivo).
-- **«Metà degli utenti»** per la fascia 25°–75° percentile.
+- **«Metà degli utenti»** per la fascia 25°–75° percentile (dalla Fase 4 «metà dei partecipanti»).
 - **Scale fisse:** stress e Body Battery restano su 0–100.
 
 ## Problemi aperti
@@ -129,6 +153,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
   - `tests/metrics.test.ts` e un commento di `metrics.ts`: metabolismo a riposo 1.899 kcal/giorno e 1.404 kcal «a riposo» alle 17:44 del 3/11.
 - **Formato di `GET /admin/backup`:** da confermare con il gestore del server. Oggi si accetta un file SQLite, anche compresso con gzip.
 - **Frequenza di campionamento e unità degli ECG:** 250 Hz secondo il codice Gima, circa 74 Hz secondo `duration_ms` dei dati reali (Fase 5).
-- **Valore del periodo nel confronto:** il giorno in corso entra nella frase di riepilogo appena è valido, quindi con dati parziali. Da decidere nella Fase 4.
+- **Da discutere: soglia del confronto.** Con soglia 5 la mediana coincide spesso con il valore di un singolo partecipante (con 5 valori è il terzo). Quando i partecipanti saranno molti, valutare di alzare la soglia: è già configurabile con `COMPARE_MIN_PARTICIPANTS` (predefinita 5, non meno di 5).
+- **Tempo della cache del confronto con molti partecipanti:** cresce circa in proporzione ai giorni-persona (28 s per 108 persone × 28 giorni). Non blocca le risposte (si usa la cache precedente), ma con centinaia di partecipanti e mesi di dati si potrebbe aggiornare solo i giorni nuovi, come nel browser.
 - **Avviso del worker SQLite** in console («Ignoring inability to install OPFS sqlite3_vfs»): innocuo, l'app usa `opfs-sahpool`. C'era già prima.
 - **Grafici della vista Giorno** senza etichetta dell'obiettivo a destra; **legenda delle fasce dello stress** nascosta quando il confronto è attivo.

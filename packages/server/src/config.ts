@@ -5,6 +5,7 @@
  */
 import { isAbsolute, resolve } from "node:path";
 import { DATASETS, isAppId, type AppId } from "@bridge/core/datasets";
+import { MIN_USERS } from "@bridge/core/comparison/aggregate";
 import { DEFAULT_VALID_DAY_HOURS } from "@bridge/core/metrics";
 
 export type DataConfig =
@@ -43,6 +44,8 @@ export interface Config {
   login: { maxFailures: number; windowMs: number };
   /** hours with heart rate for a valid day: one value for the app, the comparison and the tests */
   validDayHours: number;
+  /** fewest other participants with data for any comparison aggregate (at least 5) */
+  compareMinParticipants: number;
 }
 
 export class ConfigError extends Error {}
@@ -130,8 +133,15 @@ export function loadConfig(env: NodeJS.ProcessEnv, baseDir = process.cwd()): Con
     admin: adminUser && adminPassword ? { username: adminUser, password: adminPassword } : null,
     login: { maxFailures: num(env, "LOGIN_MAX_FAILURES", 5, 1), windowMs: num(env, "LOGIN_WINDOW_MIN", 15, 1) * 60_000 },
     validDayHours: validDayHours(env),
+    compareMinParticipants: compareMin(env),
   };
 }
+
+const compareMin = (env: NodeJS.ProcessEnv) => {
+  const n = num(env, "COMPARE_MIN_PARTICIPANTS", MIN_USERS, MIN_USERS);
+  if (!Number.isInteger(n)) throw new ConfigError(`COMPARE_MIN_PARTICIPANTS deve essere un numero intero ≥ ${MIN_USERS}`);
+  return n;
+};
 
 const validDayHours = (env: NodeJS.ProcessEnv) => {
   const h = num(env, "VALID_DAY_MIN_HOURS", DEFAULT_VALID_DAY_HOURS, 1);
@@ -175,6 +185,7 @@ export function describeConfig(c: Config) {
     data: c.data.mode === "file" ? { mode: "file", file: c.data.file } : { mode: "backup", url: c.data.url, dir: c.data.dir, intervalMin: c.data.intervalMin, minAgeMin: c.data.minAgeMin },
     authDb: c.authDb,
     validDayHours: c.validDayHours,
+    compareMinParticipants: c.compareMinParticipants,
     sessionIdle: { participantDays: c.sessionIdleMs.participant / 86_400_000, adminHours: c.sessionIdleMs.admin / 3_600_000 },
   };
 }

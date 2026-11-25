@@ -13,7 +13,7 @@ import { syncCopy, type SyncApi, type SyncProgress, type SyncReport } from "@bri
 import { startOfDay } from "@bridge/core/time-zone";
 import { onLogout, useMe } from "@/auth";
 import { ApiError, apiGet, apiPost, errorMessage } from "@/lib/api";
-import { DbClient } from "@/lib/db/client";
+import { sharedDbClient, type DbClient } from "@/lib/db/client";
 import { AVAILABILITY_SQL } from "@/lib/empty-states";
 
 /** the app's view of the person: their participant id (USER_ID of their rows), name and goals */
@@ -119,7 +119,8 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
   const me = useMe();
   const app = me.app.id;
   const participantId = me.account.participantId!;
-  const [db] = useState(() => new DbClient());
+  // one client for the whole page (two workers cannot open the same OPFS files)
+  const [db] = useState(sharedDbClient);
   const [opened, setOpened] = useState<{ persistent: boolean } | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [goals, setGoals] = useState<Goals>(DEFAULT_GOALS);

@@ -4,12 +4,8 @@
  * participants of one or more server databases. Meant to run on the server (Node): the app only
  * ever receives the aggregates.
  */
-import { CohortSource } from "../comparison/cohort";
-import { userDailyValues } from "../comparison/daily-values";
-import type { CompareMetric, ComparisonQuery } from "../comparison/types";
-import { addDays } from "../db/queries";
+import { FactsComparisonSource, personFacts, type PersonFacts } from "../comparison/facts";
 import type { SqlExecutor } from "../db/sql";
-import { loadRange, type RangeData } from "../range-data";
 import { STUDY_TIME_ZONE } from "../time-zone";
 import { SERVER_TABLES, type Row, type ServerTable } from "./schema";
 import { createLocalViews } from "./views";
@@ -42,46 +38,17 @@ export async function participantsOf(dbs: SqlExecutor[], opts: { materialize?: b
 }
 
 /**
- * A snapshot of the server's data: opened on materialized copies of the app's tables (see
- * createLocalViews), with each participant's period computed once and reused for every metric.
- * Open a new one (or call refresh) after new data is uploaded.
+ * The comparison on the server's participants: each one's daily facts computed once with loadRange
+ * through the views (the app's rules), then FactsComparisonSource answers from them. Open a new one
+ * after new data is uploaded (the server does it when its data copy changes).
  */
-export class ServerComparisonSource extends CohortSource {
-  readonly sample = false;
-  private ranges = new Map<string, Promise<RangeData>>();
-
-  constructor(
-    private participants: Participant[],
-    private dbs: SqlExecutor[] = [],
-    now?: () => number,
-  ) {
-    super(now);
-  }
-
-  /** Opens the snapshot (days in the study's time zone, whatever the process's own zone). */
-  static async open(dbs: SqlExecutor[], now?: () => number) {
-    return new ServerComparisonSource(await participantsOf(dbs, { materialize: true, timeZone: STUDY_TIME_ZONE }), dbs, now);
-  }
-
-  /** Rebuilds the snapshot (after uploads). */
-  async refresh() {
-    this.participants = await participantsOf(this.dbs, { materialize: true, timeZone: STUDY_TIME_ZONE });
-    this.ranges.clear();
-  }
-
-  /** each participant's days computed exactly like the app computes the user's (loadRange) */
-  protected async valuesOf(metric: CompareMetric, days: number[], query: ComparisonQuery) {
-    const others = this.participants.filter((p) => p.key !== query.excludeUserId);
-    const from = days[0];
-    const to = addDays(days[days.length - 1], 1);
-    const out: (number | null)[][] = [];
-    for (const p of others) {
-      const key = `${p.key}:${from}:${to}`;
-      let r = this.ranges.get(key);
-      if (!r) this.ranges.set(key, (r = loadRange(p.db, p.id, from, to)));
-      out.push(userDailyValues(metric, await r));
-    }
-    return out;
+export class ServerComparisonSource extends FactsComparisonSource {
+  /** Opens a snapshot over the participants of `dbs` (days in the study's time zone, whatever the process's). */
+  static async open(dbs: SqlExecutor[], now: () => number = () => Math.floor(Date.now() / 1000), opts: { minUsers?: number } = {}) {
+    const people = await participantsOf(dbs, { materialize: true, timeZone: STUDY_TIME_ZONE });
+    const facts: PersonFacts[] = [];
+    for (const p of people) facts.push(await personFacts(p.db, p.key, p.id, now()));
+    return new ServerComparisonSource(facts, now, opts.minUsers);
   }
 }
 

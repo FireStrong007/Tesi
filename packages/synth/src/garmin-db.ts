@@ -9,6 +9,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { SERVER_SCHEMA, SERVER_TABLES, type ServerTable } from "@bridge/core/server/schema";
+import { demoCohort } from "./demo/cohort";
 import { DEFAULT_PERSONA, generateDemoFiles, rng, type Persona } from "./demo/generator";
 import { fitToServerRows } from "./server/fit-to-server";
 import { fakeHash, insertRows, writeDatabaseFile, type SqlRow } from "./sqlite-file";
@@ -43,6 +44,14 @@ export function defaultGarminParticipants(days = 28): GarminParticipantSpec[] {
     { code: "SYN-G07", seed: 107, days, omit: [...SLEEP, "GARMIN_SPO2_SAMPLE", ...HRV], persona: { activity: 0.3, restingHr: 68 } },
     { code: "SYN-G08", seed: 108, days: Math.min(days, 3), omit: HRV },
   ];
+}
+
+/**
+ * `n` more participants with the demo cohort's personas (varied activity, sleep, stress, ...), all
+ * with data until now: enough people for the comparison with the others.
+ */
+export function cohortParticipants(n: number, days = 28): GarminParticipantSpec[] {
+  return demoCohort(n).map((m, i) => ({ code: `SYN-C${String(i + 1).padStart(3, "0")}`, seed: m.seed, days, persona: m.persona, omit: m.hasSpo2 ? HRV : ["GARMIN_SPO2_SAMPLE", ...HRV] }));
 }
 
 const DAY_MS = 86_400_000;

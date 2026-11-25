@@ -11,6 +11,7 @@ import { createApp, ensureFirstAdmin } from "./app";
 import { LoginLimiter } from "./auth/limiter";
 import { AuthStore } from "./auth/store";
 import { ConfigError, configSecrets, describeConfig, loadConfig } from "./config";
+import { ComparisonService, workerBuilder } from "./comparison/service";
 import { createDataSource } from "./data-source";
 import { createLogger } from "./log";
 
@@ -40,13 +41,16 @@ await ensureFirstAdmin(auth, config, log);
 const data = createDataSource(config.data, DATASETS[config.app], log);
 await data.start();
 const limiter = new LoginLimiter(config.login.maxFailures, config.login.windowMs);
-const app = createApp({ config, auth, data, limiter, log });
+const comparison = new ComparisonService(data, config.app, { minParticipants: config.compareMinParticipants, builder: workerBuilder(log), log });
+comparison.start();
+const app = createApp({ config, auth, data, limiter, log, comparison });
 
 const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => log.info(`In ascolto su http://${info.address}:${info.port}`));
 
 const stop = () => {
   log.info("Arresto");
   server.close();
+  comparison.close();
   data.close();
   auth.close();
   process.exit(0);

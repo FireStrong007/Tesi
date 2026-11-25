@@ -24,6 +24,8 @@ import { checkDataDb, openDataFile } from "./sqlite";
 
 export interface DataSnapshot {
   db: DatabaseSync;
+  /** the copy's file (opened read-only again by the comparison's worker) */
+  file: string;
   /** changes with every new copy (caches compare it) */
   version: number;
   /** when this copy was taken (ms) */
@@ -111,9 +113,9 @@ abstract class BaseSource implements DataSource {
   }
 
   /** puts a new copy in use; the old connection is closed a minute later (requests still reading it) */
-  protected use(db: DatabaseSync, takenAt: number) {
+  protected use(db: DatabaseSync, file: string, takenAt: number) {
     const old = this.snapshot;
-    this.snapshot = { db, version: ++versions, takenAt };
+    this.snapshot = { db, file, version: ++versions, takenAt };
     if (old) {
       const t = setTimeout(() => {
         this.retired.delete(t);
@@ -169,7 +171,7 @@ export class FileDataSource extends BaseSource {
       if (stamp === this.stamp && this.snapshot) return { updated: false };
       const db = this.openChecked(this.file);
       this.stamp = stamp;
-      this.use(db, st.mtimeMs);
+      this.use(db, this.file, st.mtimeMs);
       this.lastError = null;
       this.log.info("Dati aperti in sola lettura", { file: this.file, version: this.snapshot!.version });
       return { updated: true };
@@ -215,7 +217,7 @@ export class BackupDataSource extends BaseSource {
     for (const f of this.copies()) {
       const path = join(this.cfg.dir, f);
       try {
-        this.use(this.openChecked(path), statSync(path).mtimeMs);
+        this.use(this.openChecked(path), path, statSync(path).mtimeMs);
         this.file = path;
         this.log.info("Copia dei dati ripresa dal disco", { file: f });
         break;
@@ -245,7 +247,7 @@ export class BackupDataSource extends BaseSource {
       const name = `${this.ds.app}-${new Date(started).toISOString().replace(/[:.]/g, "-")}.db`;
       const path = join(this.cfg.dir, name);
       renameSync(tmp, path);
-      this.use(this.openChecked(path), started);
+      this.use(this.openChecked(path), path, started);
       const previous = this.file;
       this.file = path;
       this.lastError = null;

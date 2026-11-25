@@ -11,6 +11,8 @@ export class DbClient implements SqlExecutor {
   private seq = 0;
   private pending = new Map<number, Pending>();
   info: InitInfo | null = null;
+  /** erased or closed: a new client is needed (sharedDbClient) */
+  closed = false;
 
   constructor() {
     this.worker = new Worker(new URL("./db.worker.ts", import.meta.url), { type: "module" });
@@ -62,12 +64,24 @@ export class DbClient implements SqlExecutor {
     try {
       await this.call<void>({ op: "erase" });
     } finally {
-      this.worker.terminate();
+      this.close();
     }
   }
 
   /** stops the worker without touching the copy */
   close() {
+    this.closed = true;
     this.worker.terminate();
   }
+}
+
+let shared: DbClient | null = null;
+/**
+ * The page's only client: OPFS lets one worker at a time open the copy's files, so two clients
+ * (e.g. React StrictMode creating components twice in development) would fight over them. A new one
+ * only after the previous was closed (logout).
+ */
+export function sharedDbClient(): DbClient {
+  if (!shared || shared.closed) shared = new DbClient();
+  return shared;
 }

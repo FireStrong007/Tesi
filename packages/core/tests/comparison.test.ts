@@ -3,6 +3,7 @@ import { distributionOfUsers, MIN_USERS, positionOf, quantile, standingAmong, su
 import { metricValue, periodValue, weeklyTotal, weeksCovering, type DayFacts } from "../src/comparison/daily-values";
 import { addDays, startOfDay } from "../src/db/queries";
 import { DEFAULT_VALID_DAY_HOURS, MIN_VALID_DAYS, getValidDayHours, isValidDay, setValidDayHours } from "../src/metrics";
+import { FactsComparisonSource, type PersonFacts } from "../src/comparison/facts";
 import { loadRange } from "../src/range-data";
 import { createLocalViews } from "../src/server/views";
 import { localParts } from "../src/time-zone";
@@ -15,20 +16,23 @@ const today = startOfDay(nowTs);
 describe("daily distribution of the other users", () => {
   it("computes median and 25th/75th percentile of the users with valid data", () => {
     // sorted: 10 20 30 40 50 -> positions 1, 2, 3
-    expect(distributionOfUsers([50, 10, null, 30, 40, 20, undefined])).toEqual({ median: 30, p25: 20, p75: 40, n: 5 });
+    expect(distributionOfUsers([50, 10, null, 30, 40, 20, undefined])).toEqual({ median: 30, p25: 20, p75: 40, mean: 30, n: 5 });
     // even count, interpolated between the closest ranks (like numpy / R type 7)
-    expect(distributionOfUsers([1, 2, 3, 4, 5, 6, 7, 8])).toEqual({ median: 4.5, p25: 2.75, p75: 6.25, n: 8 });
+    expect(distributionOfUsers([1, 2, 3, 4, 5, 6, 7, 8])).toEqual({ median: 4.5, p25: 2.75, p75: 6.25, mean: 4.5, n: 8 });
     expect(quantile([7], 0.25)).toBe(7);
     // the band always contains the median
     const d = distributionOfUsers([3, 99, 4, 4, 5, 1, 60, 8, 2]);
     expect(d.p25! <= d.median! && d.median! <= d.p75!).toBe(true);
   });
 
-  it("hides median and percentiles when fewer than 5 users contributed", () => {
+  it("hides median, percentiles and mean when fewer than 5 users contributed (or the configured minimum)", () => {
     expect(MIN_USERS).toBe(5);
-    expect(distributionOfUsers([10, 20, 30, 40, null])).toEqual({ median: null, p25: null, p75: null, n: 4 });
-    expect(distributionOfUsers([])).toEqual({ median: null, p25: null, p75: null, n: 0 });
+    expect(distributionOfUsers([10, 20, 30, 40, null])).toEqual({ median: null, p25: null, p75: null, mean: null, n: 4 });
+    expect(distributionOfUsers([])).toEqual({ median: null, p25: null, p75: null, mean: null, n: 0 });
     expect(distributionOfUsers([10, 20, 30, 40, 50]).median).toBe(30);
+    // the mean is not the median: one far value moves it
+    expect(distributionOfUsers([1, 2, 3, 4, 100])).toMatchObject({ median: 3, mean: 22 });
+    expect(distributionOfUsers([10, 20, 30, 40, 50], 6).median).toBeNull();
   });
 });
 
@@ -46,7 +50,7 @@ describe("standing among the other users (between people)", () => {
   });
 
   it("needs at least 5 other users for percentiles and rank", () => {
-    expect(standingAmong([1, 2, 3, 4, null, null], 2)).toEqual({ median: null, p25: null, p75: null, n: 4, percentile: null });
+    expect(standingAmong([1, 2, 3, 4, null, null], 2)).toEqual({ median: null, p25: null, p75: null, mean: null, n: 4, percentile: null });
     expect(standingAmong([1, 2, 3, 4, 5], 2).percentile).toBe(30);
   });
 
@@ -62,29 +66,29 @@ describe("standing among the other users (between people)", () => {
 describe("summary line", () => {
   const fmt = (v: number) => String(Math.round(v));
   const text = (v: number) => `${fmt(v)} passi/giorno`;
-  const st = (percentile: number | null, median: number | null = 8667): PeriodStanding => ({ median, p25: 6000, p75: 11000, n: 47, percentile });
+  const st = (percentile: number | null, median: number | null = 8667): PeriodStanding => ({ median, p25: 6000, p75: 11000, mean: median, n: 47, percentile });
   const line = (mine: number | null, myDays: number, standing: PeriodStanding) => summarySentence({ span: "Ultimi 30 giorni", mine, myDays, standing, text, fmt });
 
   it("judges between people with at least 7 valid days", () => {
     expect(MIN_VALID_DAYS).toBe(7);
-    expect(line(4120, 12, st(35.4))).toBe("Ultimi 30 giorni: 4120 passi/giorno, nella norma. Più di 35 utenti su 100 (mediana degli altri 8667)");
-    expect(line(2000, 12, st(8))).toBe("Ultimi 30 giorni: 2000 passi/giorno, sotto la norma. Più di 8 utenti su 100 (mediana degli altri 8667)");
-    expect(line(16000, 7, st(96))).toBe("Ultimi 30 giorni: 16000 passi/giorno, sopra la norma. Più di 96 utenti su 100 (mediana degli altri 8667)");
-    expect(line(1, 9, st(0))).toContain("sotto la norma. Meno di tutti gli altri utenti");
-    expect(line(1, 9, st(1))).toContain("Più di 1 utente su 100");
+    expect(line(4120, 12, st(35.4))).toBe("Ultimi 30 giorni: 4120 passi/giorno, nella norma. Più di 35 partecipanti su 100 (mediana degli altri 8667)");
+    expect(line(2000, 12, st(8))).toBe("Ultimi 30 giorni: 2000 passi/giorno, sotto la norma. Più di 8 partecipanti su 100 (mediana degli altri 8667)");
+    expect(line(16000, 7, st(96))).toBe("Ultimi 30 giorni: 16000 passi/giorno, sopra la norma. Più di 96 partecipanti su 100 (mediana degli altri 8667)");
+    expect(line(1, 9, st(0))).toContain("sotto la norma. Meno di tutti gli altri partecipanti");
+    expect(line(1, 9, st(1))).toContain("Più di 1 partecipante su 100");
   });
 
   it("asks for 7 valid days before judging, and never shows percentages", () => {
     expect(line(3500, 5, st(20))).toBe("Ultimi 30 giorni: 3500 passi/giorno. Servono almeno 7 giorni di dati per il confronto (ne hai 5)");
     expect(line(null, 0, st(null))).toBe("Ultimi 30 giorni: mediana degli altri 8667. Servono almeno 7 giorni di dati per il confronto (ne hai 0)");
     // a median of 0 (e.g. intensity minutes): no division, no percentage
-    const zero = line(30, 10, { median: 0, p25: 0, p75: 20, n: 40, percentile: 70 });
-    expect(zero).toBe("Ultimi 30 giorni: 30 passi/giorno, nella norma. Più di 70 utenti su 100 (mediana degli altri 0)");
+    const zero = line(30, 10, { median: 0, p25: 0, p75: 20, mean: 6, n: 40, percentile: 70 });
+    expect(zero).toBe("Ultimi 30 giorni: 30 passi/giorno, nella norma. Più di 70 partecipanti su 100 (mediana degli altri 0)");
     expect(zero).not.toMatch(/%|Infinity|NaN/);
   });
 
   it("without enough other users says so", () => {
-    expect(line(5000, 20, { median: null, p25: null, p75: null, n: 3, percentile: null })).toBe("Ultimi 30 giorni: 5000 passi/giorno. Troppo pochi utenti per un confronto");
+    expect(line(5000, 20, { median: null, p25: null, p75: null, mean: null, n: 3, percentile: null })).toBe("Ultimi 30 giorni: 5000 passi/giorno. Non ci sono abbastanza partecipanti per un confronto");
   });
 });
 
@@ -114,6 +118,32 @@ describe("valid days and period values", () => {
     expect(metricValue("steps", facts(10, 5000))).toBe(5000);
     expect(() => setValidDayHours(0)).toThrow();
     expect(() => setValidDayHours(25)).toThrow();
+  });
+
+  it("today does not count in the period value until it is over (the user and the others alike)", () => {
+    const days = [addDays(today, -2), addDays(today, -1), today];
+    // today's partial 500 steps would pull the mean down
+    expect(periodValue("steps", days, [8000, 6000, 500], nowTs)).toEqual({ value: 7000, days: 2 });
+    expect(periodValue("steps", days, [8000, 6000, 500], addDays(today, 1) + 60)).toEqual({ value: 4833.333333333333, days: 3 });
+  });
+
+  it("FactsComparisonSource: the asking person's own value from their facts, never among the others", async () => {
+    const days = Array.from({ length: 10 }, (_, i) => addDays(today, i - 10));
+    const person = (key: string, steps: number): PersonFacts => ({ key, id: 0, days, facts: days.map(() => facts(14, steps)) });
+    const src = new FactsComparisonSource([person("me", 3000), ...[4000, 5000, 6000, 7000, 8000].map((v, i) => person(`p${i}`, v))], () => nowTs);
+    const st = await src.standingOf("steps", days[0], today, "me");
+    expect(st.mine).toEqual({ value: 3000, days: 10 });
+    expect(st.n).toBe(5);
+    expect(st.median).toBe(6000);
+    expect(st.mean).toBe(6000);
+    expect(st.percentile).toBe(0);
+    const d = await src.dailyDistribution("steps", days[0], today, { excludeUserId: "me" });
+    expect(d.every((x) => x.n === 5 && x.median === 6000)).toBe(true);
+    // one fewer than the minimum: nothing
+    const four = await src.dailyDistribution("steps", days[0], today, { excludeUserId: "p0" });
+    expect(four[0].n).toBe(5); // "me" is now among the others
+    const strict = new FactsComparisonSource(src.people, () => nowTs, 6);
+    expect((await strict.dailyDistribution("steps", days[0], today, { excludeUserId: "me" }))[0]).toMatchObject({ n: 5, median: null, mean: null });
   });
 
   it("a period value is the mean of the valid days", () => {

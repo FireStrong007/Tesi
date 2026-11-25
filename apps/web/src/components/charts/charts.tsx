@@ -252,10 +252,11 @@ export interface InfoContent {
 
 function InfoPanel({ items, message }: InfoContent) {
   return (
-    <div className="bg-muted/40 grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-lg border px-3 py-2.5 sm:grid-cols-4">
+    <div className={cn("bg-muted/40 grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-lg border px-3 py-2.5", items.length >= 5 ? "sm:grid-cols-5" : "sm:grid-cols-4")}>
       {items.map((c) => (
         <div key={c.label} className="min-w-0">
-          <div className={cn("truncate text-[11px] font-medium", !c.color && "text-muted-foreground")} style={c.color ? { color: c.color } : undefined}>
+          {/* labels wrap: "Partecipante tipico (mediana)" must be read whole */}
+          <div className={cn("text-[11px] leading-tight font-medium break-words", !c.color && "text-muted-foreground")} style={c.color ? { color: c.color } : undefined}>
             {c.label}
           </div>
           <div className="text-sm font-semibold tabular-nums">

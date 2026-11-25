@@ -1,18 +1,20 @@
 /**
  * Entry point for the UI: the only place that decides where the comparison with the other
- * participants comes from. Until Fase 4 (the server's comparison) there is none: «Confronta» is
- * hidden (COMPARE_AVAILABLE) and the charts never ask.
+ * participants comes from: our server (http-source.ts).
  */
-import type { ComparisonSource } from "@bridge/core/comparison/types";
+import { HttpComparisonSource } from "./http-source";
 
 export type { CompareMetric, ComparisonSource, DailyDistribution } from "@bridge/core/comparison/types";
 export type { PeriodStanding } from "@bridge/core/comparison/aggregate";
-export { MIN_USERS, summarySentence } from "@bridge/core/comparison/aggregate";
+export { MIN_USERS, NOT_ENOUGH_PARTICIPANTS, summarySentence } from "@bridge/core/comparison/aggregate";
 export { WEEKLY_METRICS, periodValue, userDailyValues, weeklyTotal, weeksCovering } from "@bridge/core/comparison/daily-values";
+export type { ServerStanding } from "./http-source";
 
-/** «Confronta» is shown only when the server's comparison is there (Fase 4) */
-export const COMPARE_AVAILABLE = false;
+/** «Confronta» is shown (the server computes the comparison) */
+export const COMPARE_AVAILABLE = true;
 
-export function getComparisonSource(): ComparisonSource {
-  throw new Error("Il confronto con gli altri partecipanti arriva con la Fase 4");
+let source: HttpComparisonSource | null = null;
+export function getComparisonSource(): HttpComparisonSource {
+  source ??= new HttpComparisonSource();
+  return source;
 }

@@ -30,7 +30,7 @@ function writableSource(path: string) {
   const db = new DatabaseSync(path);
   let version = 1;
   const src: DataSource = {
-    current: () => ({ db, version, takenAt: NOW.getTime() }),
+    current: () => ({ db, file: path, version, takenAt: NOW.getTime() }),
     refresh: async () => ({ updated: false }),
     status: () => ({ mode: "file", takenAt: NOW.getTime(), version, lastAttemptAt: null, lastError: null, refreshing: false }),
     start: async () => {},

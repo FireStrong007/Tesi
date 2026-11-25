@@ -13,6 +13,7 @@ import { bodyLimit } from "hono/body-limit";
 import { compress } from "hono/compress";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { DATASETS } from "@bridge/core/datasets";
+import { COMPARE_METRICS, type CompareMetric } from "@bridge/core/comparison/types";
 import { checkGoals } from "@bridge/core/goals";
 import { STUDY_TIME_ZONE } from "@bridge/core/time-zone";
 import type { Config } from "./config";
@@ -20,6 +21,7 @@ import { NoDataError, type DataSource } from "./data-source";
 import type { LoginLimiter } from "./auth/limiter";
 import { dummyHash, hashPassword, passwordProblem, temporaryPassword, verifyPassword } from "./auth/passwords";
 import { USERNAME_RE, normalizeUsername, sameToken, type Account, type AuthStore, type Role, type Session } from "./auth/store";
+import type { ComparisonService } from "./comparison/service";
 import type { Logger } from "./log";
 import { BadRequest, countsOf, devicesOf, participantCode, participantExists, participantsOverview, readRows, tableInfos } from "./participant-data";
 
@@ -29,6 +31,8 @@ export interface AppDeps {
   data: DataSource;
   limiter: LoginLimiter;
   log: Logger;
+  /** the comparison with the other participants (absent: the endpoints answer 503) */
+  comparison?: ComparisonService;
   now?: () => number;
 }
 
@@ -276,6 +280,49 @@ export function createApp(deps: AppDeps) {
     return c.json({ counts: countsOf(snap.db, ds, pid(c)), dataVersion: snap.version, dataTakenAt: snap.takenAt });
   });
 
+  // ------------------------------------------------------------ participant: comparison with the others
+
+  const MAX_COMPARE_DAYS = 400;
+  /** metric and period of a comparison request; the period in whole seconds, at most MAX_COMPARE_DAYS */
+  const compareQuery = (c: C) => {
+    const metric = c.req.query("metric") as CompareMetric;
+    const from = Number(c.req.query("from"));
+    const to = Number(c.req.query("to"));
+    if (!COMPARE_METRICS.includes(metric)) throw new HttpError(400, "Metrica non valida.");
+    if (!Number.isInteger(from) || !Number.isInteger(to) || to <= from || to - from > MAX_COMPARE_DAYS * 86_400) throw new HttpError(400, "Periodo non valido.");
+    return { metric, from, to };
+  };
+  /** the cache (the previous one while a new one is built); the asking participant by their id */
+  const compareSource = async (c: C) => {
+    const src = deps.comparison ? await deps.comparison.source() : null;
+    if (!src) throw new HttpError(503, "Il confronto non è ancora disponibile. Riprova tra qualche minuto.", "no_comparison");
+    const me = pid(c);
+    // never among the others; a participant not yet in the cache is not in it anyway
+    const key = src.people.find((p) => p.id === me)?.key ?? `#${me}`;
+    const st = deps.comparison!.status();
+    c.header("Cache-Control", "no-store");
+    return { src, key, meta: { minParticipants: src.minUsers, dataTakenAt: st.dataTakenAt } };
+  };
+
+  app.get("/api/compare/daily", participant, async (c) => {
+    const { metric, from, to } = compareQuery(c);
+    const { src, key, meta } = await compareSource(c);
+    return c.json({ ...meta, days: await src.dailyDistribution(metric, from, to, { excludeUserId: key }) });
+  });
+
+  app.get("/api/compare/weekly", participant, async (c) => {
+    const { metric, from, to } = compareQuery(c);
+    const { src, key, meta } = await compareSource(c);
+    return c.json({ ...meta, weeks: await src.weeklyDistribution(metric, from, to, { excludeUserId: key }) });
+  });
+
+  // the asking participant's period value is computed here from the same data as the others'
+  app.get("/api/compare/standing", participant, async (c) => {
+    const { metric, from, to } = compareQuery(c);
+    const { src, key, meta } = await compareSource(c);
+    return c.json({ ...meta, standing: await src.standingOf(metric, from, to, key) });
+  });
+
   // ------------------------------------------------------------ participant: goals
 
   app.get("/api/me/settings", participant, (c) => c.json({ goals: auth.goals(session(c).account.id) }));
@@ -371,6 +418,7 @@ export function createApp(deps: AppDeps) {
     return c.json({
       app: { id: ds.app, label: ds.label },
       data: data.status(),
+      comparison: deps.comparison?.status() ?? null,
       accounts: { participants: accounts.filter((a) => a.role === "participant").length, admins: accounts.filter((a) => a.role === "admin").length },
     });
   });

@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll } from "vitest";
 import { DATASETS, type AppId } from "@bridge/core/datasets";
-import { writeGarminDb } from "@bridge/synth/garmin-db";
+import { cohortParticipants, defaultGarminParticipants, writeGarminDb } from "@bridge/synth/garmin-db";
 import { writeGimaDb } from "@bridge/synth/gima-db";
 import { createApp, ensureFirstAdmin } from "../src/app";
+import { ComparisonService, inlineBuilder, type Builder } from "../src/comparison/service";
 import { LoginLimiter } from "../src/auth/limiter";
 import { AuthStore } from "../src/auth/store";
 import { loadConfig, configSecrets, type Config } from "../src/config";
@@ -31,12 +32,12 @@ export function tempDir(prefix = "bridge-server-") {
 
 const dbCache = new Map<string, string>();
 /** a synthetic research database for the app (default participants, a few days), written once per file */
-export function syntheticDb(app: AppId, dir: string, days = 3) {
-  const key = `${app}:${dir}:${days}`;
+export function syntheticDb(app: AppId, dir: string, days = 3, cohort = 0) {
+  const key = `${app}:${dir}:${days}:${cohort}`;
   let path = dbCache.get(key);
   if (!path) {
-    path = join(dir, `${app}-data.db`);
-    if (app === "vitabridge") writeGarminDb(path, { now: NOW });
+    path = join(dir, `${app}-data${cohort ? `-c${cohort}` : ""}.db`);
+    if (app === "vitabridge") writeGarminDb(path, { now: NOW, participants: [...defaultGarminParticipants(), ...cohortParticipants(cohort)] });
     else writeGimaDb(path, { now: NOW });
     dbCache.set(key, path);
   }
@@ -48,12 +49,13 @@ export interface TestServer {
   auth: AuthStore;
   data: DataSource;
   config: Config;
+  comparison: ComparisonService;
   logs: string[];
   clock: { t: number };
   client(opts?: { origin?: string | null; ip?: string }): Client;
 }
 
-export async function testServer(opts: { app?: AppId; dir: string; dataFile?: string; env?: Record<string, string>; data?: DataSource }): Promise<TestServer> {
+export async function testServer(opts: { app?: AppId; dir: string; dataFile?: string; env?: Record<string, string>; data?: DataSource; builder?: Builder }): Promise<TestServer> {
   const appId = opts.app ?? "vitabridge";
   const config = loadConfig(
     {
@@ -81,8 +83,10 @@ export async function testServer(opts: { app?: AppId; dir: string; dataFile?: st
   await ensureFirstAdmin(auth, config, log);
   if (!opts.data) await data.start();
   const limiter = new LoginLimiter(config.login.maxFailures, config.login.windowMs, now);
-  const app = createApp({ config, auth, data, limiter, log, now });
-  return { app, auth, data, config, logs, clock, client: (o = {}) => new Client(app, o.origin === undefined ? ORIGIN : o.origin, o.ip) };
+  // the comparison is built in the main thread here (vitest does not run the TypeScript worker)
+  const comparison = new ComparisonService(data, appId, { minParticipants: config.compareMinParticipants, builder: opts.builder ?? inlineBuilder, log, now });
+  const app = createApp({ config, auth, data, limiter, log, now, comparison });
+  return { app, auth, data, config, comparison, logs, clock, client: (o = {}) => new Client(app, o.origin === undefined ? ORIGIN : o.origin, o.ip) };
 }
 
 export interface Res<T = Record<string, unknown>> {
