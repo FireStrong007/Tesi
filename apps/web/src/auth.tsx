@@ -32,7 +32,8 @@ export function onLogout(fn: () => Promise<void>) {
   return () => void logoutHooks.delete(fn);
 }
 
-type State = { status: "loading" } | { status: "anonymous"; reason?: "expired" } | { status: "offline"; message: string } | { status: "ready"; me: Me };
+/** serverApp: which app the server is (VitaBridge or HeartBridge), known also before the login */
+type State = { status: "loading" } | { status: "anonymous"; reason?: "expired"; serverApp?: string } | { status: "offline"; message: string } | { status: "ready"; me: Me };
 
 interface AuthApi {
   state: State;
@@ -81,12 +82,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const reload = useCallback(async () => {
     try {
-      const me = await apiGet<Me | { account: null }>("auth/me");
+      const me = await apiGet<Me | { account: null; app?: { id: string } }>("auth/me");
       if (me.account) ready(me as Me);
       else {
         setCsrfToken(null);
         cacheMe(null);
-        setState({ status: "anonymous" });
+        setState({ status: "anonymous", serverApp: me.app?.id });
       }
     } catch (e) {
       setCsrfToken(null);

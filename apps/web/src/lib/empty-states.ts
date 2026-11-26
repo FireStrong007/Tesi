@@ -1,3 +1,8 @@
+import { BRAND, capitalized } from "@/brand";
+
+/** «Il tuo bracciale» / «Il tuo orologio» */
+const YOUR = capitalized(BRAND.device.your);
+
 /**
  * What the app says when a section has no data. Two different cases:
  *  - the band has never recorded that kind of data (not every band measures everything: in the
@@ -5,21 +10,21 @@
  *  - it has, but not in the period shown.
  */
 export const NEVER_RECORDED: Record<string, string> = {
-  activity: "Il tuo bracciale non ha ancora registrato attività.",
-  steps: "Il tuo bracciale non ha ancora registrato passi.",
-  calories: "Il tuo bracciale non ha ancora registrato calorie.",
-  sleep: "Il tuo bracciale non ha ancora registrato dati sul sonno.",
-  hr: "Il tuo bracciale non ha ancora registrato il battito.",
-  stress: "Il tuo bracciale non ha ancora registrato lo stress.",
-  energy: "Il tuo bracciale non ha ancora registrato la Body Battery.",
-  spo2: "Il tuo bracciale non ha ancora registrato la saturazione dell'ossigeno (SpO₂).",
-  resp: "Il tuo bracciale non ha ancora registrato la respirazione.",
-  hrv: "Il tuo bracciale non ha ancora registrato la variabilità del battito (HRV).",
-  intensity: "Il tuo bracciale non ha ancora registrato minuti di intensità.",
+  activity: `${YOUR} non ha ancora registrato attività.`,
+  steps: `${YOUR} non ha ancora registrato passi.`,
+  calories: `${YOUR} non ha ancora registrato calorie.`,
+  sleep: `${YOUR} non ha ancora registrato dati sul sonno.`,
+  hr: `${YOUR} non ha ancora registrato il battito.`,
+  stress: `${YOUR} non ha ancora registrato lo stress.`,
+  energy: `${YOUR} non ha ancora registrato la Body Battery.`,
+  spo2: `${YOUR} non ha ancora registrato la saturazione dell'ossigeno (SpO₂).`,
+  resp: `${YOUR} non ha ancora registrato la respirazione.`,
+  hrv: `${YOUR} non ha ancora registrato la variabilità del battito (HRV).`,
+  intensity: `${YOUR} non ha ancora registrato minuti di intensità.`,
 };
 
 export const NEVER_RECORDED_HINT =
-  "I dati arrivano quando l'app del telefono li invia al server dello studio. Non tutti i bracciali misurano tutto: se il tuo non registra questo dato, la sezione resterà vuota.";
+  `I dati arrivano quando l'app del telefono li invia al server dello studio. Non tutti i dispositivi misurano tutto: se ${BRAND.device.your} non registra questo dato, la sezione resterà vuota.`;
 
 export const NOTHING_IN_PERIOD = "Nessun dato per questo periodo. Il telefono invia i dati al server qualche volta al giorno: prova un altro giorno o premi Sincronizza.";
 

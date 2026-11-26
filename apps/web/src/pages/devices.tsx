@@ -3,6 +3,7 @@
  * last upload from the phone. Informative only: the app never talks to the band.
  */
 import { BatteryFullIcon, BatteryLowIcon, BatteryMediumIcon, SmartphoneIcon, TriangleAlertIcon, WatchIcon } from "lucide-react";
+import { BRAND } from "@/brand";
 import { useApp, type DeviceInfo } from "@/app-context";
 import { EmptyState, PageBody, PageHeader } from "@/components/page";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -64,7 +65,7 @@ function DeviceCard({ d, showBattery }: { d: DeviceInfo; showBattery: boolean })
         {stale && (
           <Alert>
             <TriangleAlertIcon />
-            <AlertDescription>Il telefono non invia dati da più di un giorno: controlla che l'app del telefono sia aperta e collegata al bracciale.</AlertDescription>
+            <AlertDescription>Il telefono non invia dati da più di un giorno: controlla che l'app del telefono sia aperta e collegata {BRAND.id === "vitabridge" ? "al bracciale" : "all'orologio"}.</AlertDescription>
           </Alert>
         )}
         {d.last_successful_upload_at == null && (
@@ -80,7 +81,7 @@ function DeviceCard({ d, showBattery }: { d: DeviceInfo; showBattery: boolean })
 export function DevicesPage() {
   const { devices } = useApp();
   // only Garmin bands report their battery (BATTERY_LEVEL)
-  const showBattery = devices.some((d) => d.battery != null) || devices.some((d) => d.manufacturer === "Garmin");
+  const showBattery = BRAND.battery && (devices.some((d) => d.battery != null) || devices.some((d) => d.manufacturer === "Garmin"));
   return (
     <>
       <PageHeader title="Dispositivi" subtitle="Come li vede il server dello studio" actions={<SyncButton />} />
@@ -90,7 +91,7 @@ export function DevicesPage() {
           <CardContent className="text-muted-foreground flex gap-3 text-sm">
             <SmartphoneIcon className="mt-0.5 size-4 shrink-0" />
             <p>
-              I dati passano dal bracciale al telefono, e dal telefono al server dello studio qualche volta al giorno. Questa app li legge dal server: se mancano dati
+              I dati passano {BRAND.id === "vitabridge" ? "dal bracciale" : "dall'orologio"} al telefono, e dal telefono al server dello studio qualche volta al giorno. Questa app li legge dal server: se mancano dati
               recenti, guarda qui quando il telefono li ha inviati l'ultima volta.
             </p>
           </CardContent>

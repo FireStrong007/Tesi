@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { BatteryChargingIcon, BrainIcon, DropletIcon, FlameIcon, FootprintsIcon, HeartPulseIcon, MoonIcon, RefreshCwIcon, WavesIcon, WindIcon, ZapIcon } from "lucide-react";
 import { useApp } from "@/app-context";
+import { NOT_AVAILABLE, sectionMode } from "@/brand";
 import { DayRing, Legend } from "@/components/charts/charts";
 import { DateNav, PageBody, PageHeader } from "@/components/page";
 import { Button } from "@/components/ui/button";
@@ -116,7 +117,7 @@ export function DashboardPage() {
             label="Sonno"
             color="var(--sleep-deep)"
             value={d?.sleep ? fmtMinutes(d.sleepMinutes) : "–"}
-            sub={d?.sleep ? `Punteggio ${d.sleep.score ?? "–"} · profondo ${fmtMinutes(d.sleep.minutes.deep)}` : none("sleep")}
+            sub={d?.sleep ? `${d.sleep.score != null ? `Punteggio ${d.sleep.score} · ` : ""}profondo ${fmtMinutes(d.sleep.minutes.deep)}` : none("sleep")}
             onClick={() => go("sleep")}
           >
             {d?.sleep && <SleepBar m={d.sleep.minutes} />}
@@ -132,11 +133,22 @@ export function DashboardPage() {
           >
             <Progress value={Math.min(100, ((d?.activeCalories ?? 0) / user.calories_goal) * 100)} className="bg-calories/15" indicatorClassName="bg-calories" />
           </Tile>
-          <Tile icon={<HeartPulseIcon />} label="Battito" color="var(--heart)" value={fmtInt(d?.restingHr)} unit="bpm a riposo" sub={d?.hrMin ? `Min ${d.hrMin} · max ${d.hrMax} bpm` : none("hr")} onClick={() => go("hr")} />
-          <Tile icon={<BrainIcon />} label="Stress" color="var(--stress)" value={fmtInt(d?.stressAvg)} unit="medio" sub={d?.stressAvg != null ? stressLabel(d.stressAvg) : none("stress")} onClick={() => go("stress")} />
-          <Tile icon={<BatteryChargingIcon />} label="Body Battery" color="var(--energy)" value={fmtInt(d?.energyNow)} sub={d?.energyMax != null ? `Max ${d.energyMax} · min ${d.energyMin}` : none("energy")} onClick={() => go("energy")}>
-            <Progress value={d?.energyNow ?? 0} className="bg-energy/15" indicatorClassName="bg-energy" />
-          </Tile>
+          {sectionMode("resting_hr") === "shown" ? (
+            <Tile icon={<HeartPulseIcon />} label="Battito" color="var(--heart)" value={fmtInt(d?.restingHr)} unit="bpm a riposo" sub={d?.hrMin ? `Min ${d.hrMin} · max ${d.hrMax} bpm` : none("hr")} onClick={() => go("hr")} />
+          ) : (
+            // a device without resting heart rate (Gima): the day's average
+            <Tile icon={<HeartPulseIcon />} label="Battito" color="var(--heart)" value={fmtInt(d?.hrAvg)} unit="bpm medio" sub={d?.hrMin ? `Min ${d.hrMin} · max ${d.hrMax} bpm` : none("hr")} onClick={() => go("hr")} />
+          )}
+          {sectionMode("stress") === "shown" && (
+            <Tile icon={<BrainIcon />} label="Stress" color="var(--stress)" value={fmtInt(d?.stressAvg)} unit="medio" sub={d?.stressAvg != null ? stressLabel(d.stressAvg) : none("stress")} onClick={() => go("stress")} />
+          )}
+          {sectionMode("stress") === "unavailable" && <Tile icon={<BrainIcon />} label="Stress" color="var(--stress)" value="–" sub={NOT_AVAILABLE} />}
+          {sectionMode("energy") === "shown" && (
+            <Tile icon={<BatteryChargingIcon />} label="Body Battery" color="var(--energy)" value={fmtInt(d?.energyNow)} sub={d?.energyMax != null ? `Max ${d.energyMax} · min ${d.energyMin}` : none("energy")} onClick={() => go("energy")}>
+              <Progress value={d?.energyNow ?? 0} className="bg-energy/15" indicatorClassName="bg-energy" />
+            </Tile>
+          )}
+          {sectionMode("energy") === "unavailable" && <Tile icon={<BatteryChargingIcon />} label="Body Battery" color="var(--energy)" value="–" sub={NOT_AVAILABLE} />}
           <Tile icon={<DropletIcon />} label="SpO₂" color="var(--spo2)" value={fmtInt(d?.spo2Avg)} unit="%" sub={d?.spo2Avg != null ? "Media notturna" : none("spo2")} onClick={() => go("spo2")} />
           <Tile
             icon={<WavesIcon />}
@@ -148,14 +160,17 @@ export function DashboardPage() {
             onClick={() => go("hrv")}
           />
           <Tile icon={<WindIcon />} label="Respirazione" color="var(--resp)" value={fmt1(d?.respAvg)} unit="resp/min" sub={d?.respAvg != null ? "Media del giorno" : none("resp")} onClick={() => go("resp")} />
-          <Tile
-            icon={<ZapIcon />}
-            label="Minuti di intensità"
-            color="var(--calories)"
-            value={fmtInt((d?.intensityModerate ?? 0) + 2 * (d?.intensityVigorous ?? 0))}
-            sub={available.intensity ? `Moderati ${d?.intensityModerate ?? 0} · intensi ${d?.intensityVigorous ?? 0}` : NEVER_SHORT}
-            onClick={() => go("intensity")}
-          />
+          {sectionMode("intensity") === "shown" && (
+            <Tile
+              icon={<ZapIcon />}
+              label="Minuti di intensità"
+              color="var(--calories)"
+              value={fmtInt((d?.intensityModerate ?? 0) + 2 * (d?.intensityVigorous ?? 0))}
+              sub={available.intensity ? `Moderati ${d?.intensityModerate ?? 0} · intensi ${d?.intensityVigorous ?? 0}` : NEVER_SHORT}
+              onClick={() => go("intensity")}
+            />
+          )}
+          {sectionMode("intensity") === "unavailable" && <Tile icon={<ZapIcon />} label="Minuti di intensità" color="var(--calories)" value="–" sub={NOT_AVAILABLE} />}
         </div>
         {d && !d.hasData && (
           <p className="text-muted-foreground py-2 text-center text-sm">Nessun dato per questo giorno. Il telefono invia i dati al server qualche volta al giorno: premi Sincronizza per scaricare gli ultimi.</p>

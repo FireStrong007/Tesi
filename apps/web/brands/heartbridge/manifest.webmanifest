@@ -1,0 +1,10 @@
+{
+  "name": "HeartBridge",
+  "short_name": "HeartBridge",
+  "description": "I dati del tuo orologio Gima per lo studio, solo sul tuo dispositivo.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#fbf7f6",
+  "theme_color": "#cf5539",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

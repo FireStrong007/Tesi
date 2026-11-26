@@ -25,7 +25,8 @@ export interface InitInfo {
   file: string;
 }
 
-const POOL = "vitabridge-pool";
+// one pool per app (VitaBridge and HeartBridge on the same address in development would otherwise share it)
+const POOL = `${import.meta.env.VITE_APP ?? "vitabridge"}-pool`;
 const DB_FILE = "/bridge-local.sqlite3";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

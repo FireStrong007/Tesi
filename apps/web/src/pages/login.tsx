@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { BRAND } from "@/brand";
 import { errorMessage } from "@/lib/api";
 
-export const APP_NAME = "VitaBridge";
+export const APP_NAME = BRAND.name;
 
 /** The centred card of the screens before the app (login, password change). */
 export function AuthScreen({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {

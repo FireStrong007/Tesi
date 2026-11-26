@@ -6,6 +6,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { sharedDbClient } from "@/lib/db/client";
+import { BRAND } from "@/brand";
 import { Toaster } from "@/components/ui/sonner";
 import { match, usePath } from "@/lib/router";
 import { AdminApp } from "@/pages/admin";
@@ -134,6 +135,20 @@ function InsecureContext() {
   );
 }
 
+/** This build is one app (brand.ts), the server another: say so, nothing else would work. */
+function WrongServer({ server }: { server: string }) {
+  const names: Record<string, string> = { vitabridge: "VitaBridge", heartbridge: "HeartBridge" };
+  return (
+    <Centered>
+      <TriangleAlertIcon className="text-destructive size-6" />
+      <div className="font-semibold">App e server non corrispondono</div>
+      <div className="text-muted-foreground max-w-md text-sm">
+        Questa è l'app {BRAND.name}, ma il server a cui si collega è {names[server] ?? server}. Apri l'indirizzo di {BRAND.name} che ti ha dato il responsabile dello studio.
+      </div>
+    </Centered>
+  );
+}
+
 /** Login first; then the screen of the account's role. */
 function Gate() {
   const { state, reload } = useAuth();
@@ -152,6 +167,8 @@ function Gate() {
         <Button onClick={() => void reload()}>Riprova</Button>
       </Centered>
     );
+  const serverApp = state.status === "ready" ? state.me.app.id : state.status === "anonymous" ? state.serverApp : undefined;
+  if (serverApp && serverApp !== BRAND.id) return <WrongServer server={serverApp} />;
   if (state.status === "anonymous") return <LoginPage expired={state.reason === "expired"} />;
   if (state.me.account.mustChangePassword) return <ForcedPasswordChangePage />;
   if (state.me.account.role === "admin") return <AdminApp />;

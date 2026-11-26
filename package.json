@@ -11,8 +11,10 @@
   ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "build": "npm run build -w @bridge/web && npm run build -w @bridge/server",
+    "dev:heartbridge": "node scripts/dev.mjs --app heartbridge",
+    "build": "npm run build -w @bridge/web && npm run build:heartbridge -w @bridge/web && npm run build -w @bridge/server",
     "preview": "npm run preview -w @bridge/web --",
+    "preview:heartbridge": "npm run preview:heartbridge -w @bridge/web --",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "gen:fit-profile": "python3 scripts/gen-fit-profile.py ../Gadgetbridge/FitCodeGenerator/src/main/resources/fit_profile.json > packages/synth/src/fit/profile.ts",

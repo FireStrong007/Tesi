@@ -8,7 +8,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "build:heartbridge": "tsc -b && vite build --mode heartbridge",
+    "preview": "vite preview",
+    "preview:heartbridge": "vite preview --mode heartbridge --outDir dist-heartbridge"
   },
   "dependencies": {
     "@bridge/core": "*",

@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-*
 *.local
 .env
 # real server databases: personal data, never in git

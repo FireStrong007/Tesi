@@ -19,6 +19,7 @@ import {
   WindIcon,
   ZapIcon,
 } from "lucide-react";
+import { BRAND, NOT_AVAILABLE, capitalized, sectionMode } from "@/brand";
 import { useApp, type Person } from "@/app-context";
 import { NEVER_RECORDED, NEVER_RECORDED_HINT, NOTHING_IN_PERIOD } from "@/lib/empty-states";
 import {
@@ -69,7 +70,7 @@ import { cn } from "@/lib/utils";
 import { stressLabel } from "./dashboard";
 
 type Icon = ComponentType<{ className?: string }>;
-const METRICS: { id: string; label: string; icon: Icon; color: string; periods: Period[] }[] = [
+const ALL_METRICS: { id: string; label: string; icon: Icon; color: string; periods: Period[] }[] = [
   { id: "activity", label: "Attività e sonno", icon: ActivityIcon, color: "var(--primary)", periods: ["day"] },
   { id: "steps", label: "Passi", icon: FootprintsIcon, color: "var(--steps)", periods: ["day", "week", "month"] },
   { id: "calories", label: "Calorie", icon: FlameIcon, color: "var(--calories)", periods: ["day", "week", "month"] },
@@ -82,6 +83,10 @@ const METRICS: { id: string; label: string; icon: Icon; color: string; periods: 
   { id: "hrv", label: "HRV", icon: WavesIcon, color: "var(--hrv)", periods: ["week", "month"] },
   { id: "intensity", label: "Intensità", icon: ZapIcon, color: "var(--calories)", periods: ["week", "month"] },
 ];
+/** this app's sections (brand.ts): those the device does not measure are hidden, or shown as not available */
+const METRICS = ALL_METRICS.filter((m) => sectionMode(m.id) !== "hidden");
+/** the resting heart rate of «Battito» (line, dots, tile): Gima watches do not measure it */
+const RESTING = sectionMode("resting_hr");
 type MetricId = string;
 type SleepMinutes = { deep: number; light: number; rem: number; awake: number };
 
@@ -154,7 +159,11 @@ export function ChartsPage() {
             <DateNav day={day} onChange={(d) => set({ day: d })} period={period} />
           </div>
         </div>
-        {!available[tab] ? (
+        {sectionMode(tab) === "unavailable" ? (
+          <EmptyState icon={<metric.icon />} title={NOT_AVAILABLE}>
+            {capitalized(BRAND.device.your)} non misura questo dato.
+          </EmptyState>
+        ) : !available[tab] ? (
           <EmptyState icon={<metric.icon />} title={NEVER_RECORDED[tab] ?? "Nessun dato"}>
             {NEVER_RECORDED_HINT}
           </EmptyState>
@@ -402,7 +411,15 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
                   <Center value={fmtInt(d.activeCalories + resting)} label="kcal bruciate" />
                 </SegmentRing>
               }
-              note={bmr.estimated ? "Il bracciale non ha indicato il metabolismo basale: è stimato da peso, altezza ed età del profilo." : !bmr.value ? "Per le calorie a riposo serve il metabolismo basale: il bracciale lo invia con la sincronizzazione, oppure compila peso, altezza e data di nascita nel profilo." : undefined}
+              note={
+                bmr.estimated
+                  ? `${capitalized(BRAND.device.the)} non ha indicato il metabolismo basale: è stimato da peso, altezza ed età del profilo.`
+                  : !bmr.value
+                    ? BRAND.id === "heartbridge"
+                      ? "L'orologio non misura le calorie a riposo: qui ci sono solo quelle attive."
+                      : "Per le calorie a riposo serve il metabolismo basale: il bracciale lo invia con la sincronizzazione, oppure compila peso, altezza e data di nascita nel profilo."
+                    : undefined
+              }
             >
               <Tiles
                 items={[
@@ -437,26 +454,37 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
       return (
         <MetricLayout
           summary={
-            <SummaryCard title={dateTitle} gauge={<BigValue value={fmtInt(d.restingHr)} unit="bpm" label="a riposo" icon={<HeartPulseIcon />} color="var(--heart)" />}>
+            <SummaryCard
+              title={dateTitle}
+              gauge={
+                RESTING === "shown" ? (
+                  <BigValue value={fmtInt(d.restingHr)} unit="bpm" label="a riposo" icon={<HeartPulseIcon />} color="var(--heart)" />
+                ) : (
+                  <BigValue value={fmtInt(d.hrAvg)} unit="bpm" label="media" icon={<HeartPulseIcon />} color="var(--heart)" />
+                )
+              }
+            >
               <Tiles
                 items={[
                   { label: "Minimo", value: fmtInt(d.hrMin), unit: "bpm", color: "var(--heart)" },
                   { label: "Massimo", value: fmtInt(d.hrMax), unit: "bpm", color: "var(--heart)" },
-                  { label: "Media", value: fmtInt(d.hrAvg), unit: "bpm" },
-                  { label: "Nel sonno", value: fmtInt(d.sleepHrStats.avg), unit: "bpm", sub: d.sleepHrStats.min != null ? `min ${d.sleepHrStats.min}` : undefined },
+                  RESTING === "shown" ? { label: "Media", value: fmtInt(d.hrAvg), unit: "bpm" } : { label: "Misure", value: fmtInt(d.hr.length) },
+                  RESTING === "unavailable"
+                    ? { label: "A riposo", value: "–", sub: NOT_AVAILABLE }
+                    : { label: "Nel sonno", value: fmtInt(d.sleepHrStats.avg), unit: "bpm", sub: d.sleepHrStats.min != null ? `min ${d.sleepHrStats.min}` : undefined },
                 ]}
               />
             </SummaryCard>
           }
         >
-          <ChartCard title="Frequenza cardiaca" description="La fascia chiara è il sonno, la linea tratteggiata il battito a riposo">
+          <ChartCard title="Frequenza cardiaca" description={RESTING === "shown" ? "La fascia chiara è il sonno, la linea tratteggiata il battito a riposo" : "La fascia chiara è il sonno"}>
             <TimeChart
               from={d.from}
               to={d.to}
               height={260}
               yMin={40}
               series={[{ points: d.hr, color: "var(--heart)", label: "bpm", gap: 1800 }]}
-              refLines={d.restingHr ? [{ value: d.restingHr, color: "var(--muted-foreground)", label: "Riposo" }] : []}
+              refLines={RESTING === "shown" && d.restingHr ? [{ value: d.restingHr, color: "var(--muted-foreground)", label: "Riposo" }] : []}
               bands={sleepBand(d)}
             />
           </ChartCard>
@@ -531,7 +559,9 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
       if (!d.spo2.length)
         return (
           <NoData>
-            Il bracciale non ha registrato la saturazione per questa notte. Sul vívosmart 5 la misura notturna va attivata nelle impostazioni del pulsossimetro, e consuma più batteria.
+            {BRAND.id === "vitabridge"
+              ? "Il bracciale non ha registrato la saturazione per questa notte. Sul vívosmart 5 la misura notturna va attivata nelle impostazioni del pulsossimetro, e consuma più batteria."
+              : "L'orologio non ha registrato la saturazione in questo giorno."}
           </NoData>
         );
       return (
@@ -833,7 +863,8 @@ const COMPARE: Partial<Record<MetricId, CompareConfig>> = {
   steps: { metric: "steps", text: (v) => `${fmtInt(v)} passi/giorno`, fmt: fmtInt },
   calories: { metric: "calories", text: (v) => `${fmtInt(v)} kcal attive/giorno`, fmt: (v) => `${fmtInt(v)} kcal` },
   sleep: { metric: "sleep", text: (v) => `${fmtMinutes(v)} di sonno a notte`, fmt: fmtMinutes, mineLabel: "Tu (sonno)" },
-  hr: { metric: "resting_hr", text: (v) => `${fmtInt(v)} bpm a riposo`, fmt: (v) => `${fmtInt(v)} bpm`, mineLabel: "Tu, a riposo", keepBarLine: true },
+  // the heart rate is compared at rest: not where the device does not measure it
+  ...(RESTING === "shown" ? { hr: { metric: "resting_hr", text: (v: number) => `${fmtInt(v)} bpm a riposo`, fmt: (v: number) => `${fmtInt(v)} bpm`, mineLabel: "Tu, a riposo", keepBarLine: true } as CompareConfig } : {}),
   stress: { metric: "stress", text: (v) => `stress medio ${fmtInt(v)}`, fmt: fmtInt },
   energy: { metric: "body_battery", text: (v) => `Body Battery massima ${fmtInt(v)}`, fmt: fmtInt, mineLabel: "Tu, massimo", keepBarLine: true },
   spo2: { metric: "spo2", text: (v) => `SpO₂ media ${fmtInt(v)}%`, fmt: (v) => `${fmtInt(v)}%`, onlyWithData: true },
@@ -1123,6 +1154,22 @@ function buildRange(tab: MetricId, r: RangeData, user: Person, labelOf: (d: numb
     case "hr": {
       const s = summaryOf(r.hr);
       const rest = r.resting.filter((x) => x.count).map((x) => x.min!);
+      if (RESTING !== "shown")
+        // a device without resting heart rate (Gima): the average instead, no resting dots
+        return {
+          hasData: s.days > 0,
+          gauge: <BigValue value={fmtInt(s.avg)} unit="bpm" label="media" icon={<HeartPulseIcon />} color="var(--heart)" />,
+          tiles: [
+            { label: "Minimo", value: fmtInt(s.min), unit: "bpm", color: "var(--heart)" },
+            { label: "Massimo", value: fmtInt(s.max), unit: "bpm", color: "var(--heart)" },
+            { label: "Giorni con misure", value: fmtInt(s.days) },
+            RESTING === "unavailable" ? { label: "A riposo", value: "–", sub: NOT_AVAILABLE } : { label: "Media", value: fmtInt(s.avg), unit: "bpm" },
+          ],
+          chartTitle: "Battito: minimo e massimo per giorno",
+          items: minMaxItems(r.hr, "color-mix(in oklch, var(--heart) 75%, transparent)", () => undefined),
+          axis: (v) => fmtInt(v),
+          yMin: 40,
+        };
       return {
         hasData: s.days > 0,
         gauge: <BigValue value={fmtInt(avgOf(rest))} unit="bpm" label="a riposo in media" icon={<HeartPulseIcon />} color="var(--heart)" />,
