@@ -158,7 +158,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 ### HeartBridge (Fase 5)
 - **Una sola app, due marchi:** il marchio si sceglie in compilazione (`vite --mode heartbridge`, `npm run build` compila entrambe: `apps/web/dist` e `apps/web/dist-heartbridge`). Per provare HeartBridge: `npm run dev:heartbridge` (server :8788 con `data/synthetic-gima.db`, Vite :5174; `HEARTBRIDGE_DATA_FILE` per un altro file).
   - `apps/web/src/brand.ts` decide nome, dispositivo («orologio»), sezioni e cosa fare con quelle che l'orologio non misura.
-  - **Stress, Body Battery, minuti di intensità e battito a riposo:** «nascosta» oggi, oppure «non disponibile» (sezione visibile con «Non disponibile con questo dispositivo»), da `missing` in `brand.ts`. Il battito a riposo non viene stimato.
+  - **Stress, Body Battery, minuti di intensità, battito a riposo, fase REM e momenti di irrequietezza:** «nascosta» oggi, oppure «non disponibile» (sezione visibile con «Non disponibile con questo dispositivo»), da `missing` in `brand.ts`. Il battito a riposo non viene stimato. Senza REM: niente anello, riquadri, legende, barre né riga REM nel grafico delle fasi (`lib/sleep-stages.ts`); «Sveglio» resta, perché la pausa tra due segmenti è un dato vero. Con «non disponibile» resta solo il riquadro REM con l'avviso.
   - **Colori:** corallo caldo (`#cf5539`, scuro `#f08d6a`) con icona a cuore e tracciato. In HeartBridge errori e avvisi diventano cremisi (`#b80049`) e le calorie ambra, così il corallo non si confonde con il rosso.
   - Se l'app e il server non sono la stessa app, la pagina lo dice e non va avanti.
 - **Adattatore Gima** (`packages/core/src/gima/views.ts`): le stesse tabelle dell'app di VitaBridge.
@@ -173,7 +173,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
   - **ECG (in Grafici, 26 novembre):** una metrica come le altre, con Giorno, Settimana e Mese; non c'è più la voce ECG nel menu.
     - **Settimana e Mese:** a sinistra il riepilogo (numero di registrazioni, conteggio per valutazione con barra, battito medio delle registrazioni che lo hanno, ultima registrazione); a destra un punto per registrazione (altezza = battito; verde ritmo normale, ambra le altre valutazioni; cerchio vuoto vicino all'asse se il battito manca), con lo stesso asse delle date e lo stesso riquadro al passaggio degli altri grafici del periodo (data e ora, battito o «non registrato», valutazione), poi l'elenco. Un punto o una riga aprono il Giorno di quella registrazione.
     - **Giorno:** a sinistra i valori della registrazione e la valutazione, a destra il tracciato con l'avviso «Scala dei tempi da confermare…», l'asse in «unità del dispositivo» (100 per quadretto grande), i valori limitati a ±500 e i parametri usati. Con più registrazioni nello stesso giorno, un pulsante per orario.
-    - **Tracciato (27 novembre):** gli stessi gesti degli altri grafici. Un dito o il mouse mostrano una linea con tempo e valore («3,1 s · 9 unità», nessun calcolo dal tracciato); un dito in verticale fa scorrere la pagina; due dita, Ctrl + rotella o i pulsanti cambiano la velocità della carta; il trascinamento col mouse e la rotella orizzontale spostano; il doppio tocco o doppio clic va a 50 mm/s e poi torna a 25.
+    - **Tracciato (26 novembre):** gli stessi gesti degli altri grafici. Un dito o il mouse mostrano una linea con tempo e valore («3,1 s · 9 unità», nessun calcolo dal tracciato); un dito in verticale fa scorrere la pagina; due dita, Ctrl + rotella o i pulsanti cambiano la velocità della carta; il trascinamento col mouse e la rotella orizzontale spostano; il doppio tocco o doppio clic va a 50 mm/s e poi torna a 25.
       - **Velocità:** 12,5 · 25 · 50 · 100 mm/s, con 25 come predefinita; il pizzico si ferma sul passo più vicino. Il quadretto resta della stessa grandezza sullo schermo e cambia il tempo che rappresenta: a 50 mm/s 0,02 e 0,1 s.
       - **Sotto il tracciato:** una striscia con tutta la registrazione e la parte visibile evidenziata, da trascinare o toccare per spostarsi (anche su desktop); poi la barra sempre visibile «25 mm/s · 0–5,7 s» con −, + e «25 mm/s» per tornare alla scala standard.
     - **Valutazioni:** le etichette sono brevi («Ritmo normale», «Possibili battiti prematuri atriali»…); la frase «Valutazioni automatiche del dispositivo, non sono diagnosi mediche» compare una volta per riquadro (riepilogo, valori, elenco).
@@ -204,13 +204,35 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 - **Conclusione:** è più probabile un valore fisso dell'orologio o della libreria quando la misura non c'è, non una parte intera persa dall'app. Da chiedere al gestore del server. Intanto l'app mostra solo le temperature valide (30–43 °C).
 - **Altro difetto possibile, nei soli dati:** l'unione come testo confonde i decimali a due cifre (36,05 diventerebbe «36.5»). Nei dati veri i decimali delle temperature valide sono sempre a una cifra.
 
-### Menu fisso del telefono (27 novembre)
+### Menu fisso del telefono (26 novembre)
 - **Cosa succedeva:** lo spazio in fondo alla pagina (80 px) bastava per la fine della pagina, ma un elemento portato in vista (dal browser, con Tab, con `scrollIntoView`) si allineava al bordo dello schermo e finiva sotto il menu in basso (65 px). Lo stesso in alto, sotto l'intestazione fissa e la barra delle metriche di Grafici.
 - **Ora:**
   - il menu ha un'altezza fissa (`--bottom-nav` in `index.css`: 4rem, il bordo e l'area sicura);
   - lo spazio in fondo al contenuto è esattamente quello;
   - `scroll-padding-bottom` e `scroll-padding-top` fermano gli elementi portati in vista sopra il menu e sotto l'intestazione.
 - **Verifica:** la prova nel browser porta in vista ogni riquadro, dall'alto e dal basso, e controlla che non finisca sotto nessuno dei due, in tema chiaro e scuro.
+
+### Grafico del sonno con i dati Gima (26 novembre)
+- **Cosa succedeva:** con le sovrapposizioni Battito / Ossigenazione / Respirazione la linea compariva solo in 2–3 punti, ma il riquadro al passaggio mostrava valori anche altrove. Il grafico spezzava la linea fra due misure distanti più di 15 minuti (valore fisso, pensato per il Garmin al minuto); i Gima misurano circa ogni 18 minuti nei dati sintetici e ogni 10 in quelli veri. Quasi ogni misura restava sola, e un punto solo non disegna nessuna linea; il riquadro però la trovava, perché cercava entro 15 minuti.
+- **Ora** (`packages/core/src/line-gaps.ts`):
+  - la linea si spezza dopo una pausa di più di **2,5 volte la mediana degli intervalli di quella serie**; il vecchio valore fisso di ogni grafico resta come minimo, così le serie al minuto di VitaBridge si spezzano dove prima;
+  - le misure isolate sono disegnate come **punti**;
+  - il riquadro al passaggio arriva fino a metà della soglia e mostra solo misure disegnate.
+  - Vale per tutti i grafici giornalieri: sonno, battito, SpO2, respirazione, temperatura, pressione e «Attività e sonno». L'HRV di HeartBridge ha solo Settimana e Mese.
+- **Su 14 giorni dei dati sintetici di HeartBridge:**
+  - nel grafico del sonno prima erano invisibili 160 misure di battito, 116 di SpO2 e 117 di respirazione; ora sono tutte su una linea, tranne una misura isolata di SpO2 e una di respirazione, disegnate come punti;
+  - battito, SpO2 e respirazione del giorno non avevano misure invisibili;
+  - la temperatura (solo valori validi, più radi) ora unisce i suoi punti.
+- **VitaBridge:**
+  - tutti i grafici del giorno hanno lo stesso SVG di prima (passi, calorie, battito, SpO2, respirazione, stress, Body Battery, «Attività e sonno»);
+  - nel grafico del sonno: battito e respirazione hanno la stessa linea di prima;
+  - la SpO2 notturna arriva ogni 15 minuti, quindi la soglia diventa 37,5 minuti: una sola misura mancante non spezza più la linea (come nel grafico SpO2 del giorno, che univa già fino a 60 minuti). Deciso di tenerla così, senza eccezioni.
+- **Asse della SpO2:** al massimo 100 %, ovunque (sovrapposizione nel sonno, giorno, settimana e mese); prima nel sonno arrivava a 120.
+- **Sfondo del grafico delle fasi:** copre tutte le righe mostrate (prima la riga «Sveglio» ne restava fuori) e le linee sovrapposte restano dentro l'area; vale anche per VitaBridge.
+- **Asse della temperatura:** resta 34–39 °C, ma si allarga se un valore valido (30–43 °C) ne esce.
+- **Prova nel browser:**
+  - HeartBridge 108 verifiche su 14 notti, VitaBridge 149: righe e testi, sfondo, linea dentro l'area, ogni misura isolata disegnata come punto, asse SpO2 ≤ 100, riquadro al passaggio solo su misure disegnate, nessun REM né irrequietezza in HeartBridge (presenti in VitaBridge);
+  - 390 px e desktop, chiaro e scuro, console pulita.
 
 ### Dati per lo sviluppo
 - `data/gadgetbridge.db` e `data/GimaDB.db`: copie reali, mai in git, aperte solo in sola lettura.
@@ -230,6 +252,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 - **Obiettivi** sul server (`/api/me/settings`), **«Confronta» nascosto** fino alla Fase 4 (24 novembre).
 - **Distanza (regola B, 25 novembre):** si stima solo dove i passi non hanno nessuna distanza misurata dopo di loro nello stesso giorno: passi × passo medio della persona. Il passo medio si calcola dai suoi minuti coperti dalla distanza, se sono almeno 60 minuti e 1.000 passi; altrimenti vale il **valore predefinito di 75 cm**. Nell'interfaccia è indicata come «stimata» o «in parte stimata». È la stessa regola per tutti, anche nel confronto, perché sta nelle query di core.
 - **Sincronizzazione:** finestra di 3 giorni per tabella e per dispositivo, conteggi confrontati a ogni sincronizzazione (24 novembre).
+- **Linee dei grafici (26 novembre):** si spezzano dopo 2,5 volte la mediana degli intervalli della serie (mai meno del vecchio valore fisso), misure isolate come punti; nessuna eccezione per la SpO2 notturna di VitaBridge, coerente con il grafico SpO2 del giorno. SpO2 al massimo 100 %; REM e momenti di irrequietezza nascosti in HeartBridge.
 - **ECG in Grafici (26 novembre):** metrica con Giorno / Settimana / Mese al posto della pagina e della voce di menu; etichette delle valutazioni senza «(secondo il dispositivo)», con la nota sulle diagnosi una volta per riquadro.
 - **HeartBridge (26 novembre):** corallo e icona a cuore, sezioni mancanti configurabili («nascosta» oggi), ECG a 83,33 Hz da confermare con l'avviso, asse in unità del dispositivo, pressione e temperatura fuori dal confronto, battito a riposo non stimato.
 - **Account e sorgente dei dati (25 novembre):** numero e codice del partecipante controllati su ogni richiesta; ricollegamento solo dall'amministratore, con un clic; account senza codice da ricreare; database degli account legato alla sorgente, `admin:accept-source` per accettarne una spostata; copia del browser legata ad account, partecipante e sorgente.

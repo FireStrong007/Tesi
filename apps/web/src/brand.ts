@@ -12,8 +12,12 @@ export type AppId = "vitabridge" | "heartbridge";
  */
 export type MissingSection = "hidden" | "unavailable";
 
-/** sections of VitaBridge that a watch may not have (resting_hr: the resting line and tile of «Battito») */
-export type OptionalSection = "stress" | "energy" | "intensity" | "resting_hr";
+/**
+ * sections of VitaBridge that a watch may not have: resting_hr = the resting line and tile of
+ * «Battito»; rem = the REM stage in the sleep charts, tiles and legends; restless = the «Momenti di
+ * irrequietezza» tile
+ */
+export type OptionalSection = "stress" | "energy" | "intensity" | "resting_hr" | "rem" | "restless";
 
 export interface Brand {
   id: AppId;
@@ -34,7 +38,7 @@ export interface Brand {
   activeMinutes: boolean;
 }
 
-const BRANDS: Record<AppId, Brand> = {
+export const BRANDS: Record<AppId, Brand> = {
   vitabridge: {
     id: "vitabridge",
     name: "VitaBridge",
@@ -53,7 +57,7 @@ const BRANDS: Record<AppId, Brand> = {
     tagline: "I dati del tuo orologio per lo studio",
     device: { noun: "orologio", the: "l'orologio", your: "il tuo orologio" },
     // the Gima watches do not measure them; "unavailable" shows them with a notice
-    missing: { stress: "hidden", energy: "hidden", intensity: "hidden", resting_hr: "hidden" },
+    missing: { stress: "hidden", energy: "hidden", intensity: "hidden", resting_hr: "hidden", rem: "hidden", restless: "hidden" },
     ecg: true,
     bloodPressure: true,
     temperature: true,
@@ -64,8 +68,11 @@ const BRANDS: Record<AppId, Brand> = {
 
 export const BRAND: Brand = BRANDS[import.meta.env.VITE_APP === "heartbridge" ? "heartbridge" : "vitabridge"];
 
-/** what the app does with a section: shown, hidden, or shown as not available on this device */
-export const sectionMode = (s: string): "shown" | MissingSection => BRAND.missing[s as OptionalSection] ?? "shown";
+/** what an app does with a section: shown, hidden, or shown as not available on this device */
+export const sectionModeOf = (brand: Brand, s: string): "shown" | MissingSection => brand.missing[s as OptionalSection] ?? "shown";
+
+/** what this app does with a section */
+export const sectionMode = (s: string) => sectionModeOf(BRAND, s);
 
 /** «Non disponibile con questo dispositivo» */
 export const NOT_AVAILABLE = "Non disponibile con questo dispositivo";

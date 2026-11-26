@@ -16,6 +16,7 @@ import { useSize } from "@/hooks/use-size";
 import { cn } from "@/lib/utils";
 import { fmt1, fmtDayMonth, fmtDuration, fmtInt, fmtTime } from "@bridge/core/format";
 import type { SleepSegment, TimeValue } from "@bridge/core/db/queries";
+import { isolatedPoints, lineGap, readingReach } from "@bridge/core/line-gaps";
 import { nearestPoint, pointAtOrBefore, useChartInteraction, visibleSlice, type ChartInteraction, type TimeWindow } from "./interaction";
 
 import { STAGE_COLOR, STAGE_LABEL } from "@bridge/core/colors";
@@ -578,7 +579,10 @@ export interface Series {
   color: string;
   label?: string;
   area?: boolean;
-  /** break the line when two points are further apart than this (seconds) */
+  /**
+   * break the line between two points further apart than this (seconds) or, when the series is
+   * sparser, than 2.5 times its typical interval (core/line-gaps); isolated points are drawn as dots
+   */
   gap?: number;
   dots?: boolean;
   width?: number;
@@ -594,14 +598,18 @@ export interface Band {
   color: string;
 }
 
+/** the pause that breaks a series' line (seconds); none without `gap` */
+const seriesGap = (s: Series) => (s.gap === undefined ? Infinity : lineGap(s.points, s.gap));
+
 function seriesPaths(s: Series, pts: TimeValue[], x: (t: number) => number, y: (v: number) => number, base: number) {
   let d = "";
   let area = "";
   let segStart: number | null = null;
   let prev: TimeValue | null = null;
+  const gap = seriesGap(s);
   const P = (t: number, v: number) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`;
   for (const p of pts) {
-    const brk = !prev || (s.gap !== undefined && p.timestamp - prev.timestamp > s.gap);
+    const brk = !prev || p.timestamp - prev.timestamp > gap;
     if (s.kind === "step" && prev && !brk) {
       d += `L${P(p.timestamp, prev.value)}`;
       if (s.area) area += `L${P(p.timestamp, prev.value)}`;
@@ -740,10 +748,16 @@ export function TimeChart({
     });
   }, [series, from, lo, hi, plotH]); // eslint-disable-line react-hooks/exhaustive-deps
   const transform = toView(from, ix.view, padL, plotW);
+  // the points a line cannot show (no neighbour before the break): drawn as dots like the dotted series
+  const lonely = useMemo(() => series.map((s) => (s.dots || s.kind === "step" || s.kind === "bars" || s.gap === undefined ? [] : isolatedPoints(s.points, seriesGap(s)))), [series]);
   // dots stay round, so they are placed in view coordinates (they are few: hourly or daily values)
   const dots =
     w > 0 &&
-    series.map((s, i) => s.dots && visibleSlice(s.points, vf, vt).map((p) => <circle key={`${i}:${p.timestamp}`} cx={x(p.timestamp)} cy={y(p.value)} r={2.5} fill={s.color} />));
+    series.map((s, i) =>
+      (s.dots ? visibleSlice(s.points, vf, vt) : lonely[i].filter((p) => p.timestamp >= vf && p.timestamp <= vt)).map((p) => (
+        <circle key={`${i}:${p.timestamp}`} cx={x(p.timestamp)} cy={y(p.value)} r={2.5} fill={s.color} />
+      )),
+    );
 
   let hover: ReactNode = null;
   if (ix.hoverX !== null && w > 0) {
@@ -803,24 +817,46 @@ export function TimeChart({
 
 // ---------------------------------------------------------------- sleep hypnogram
 
-const STAGE_ROW: Record<number, number> = { 1: 0, 4: 1, 2: 2, 3: 3 };
+/** the hypnogram's rows, top to bottom (stage numbers): Sveglio, REM, Leggero, Profondo */
+export const HYPNOGRAM_ROWS = [1, 4, 2, 3];
 
 export interface Overlay {
   points: TimeValue[];
   color: string;
   label: string;
   unit: string;
+  /** the axis never goes above this (SpO2: 100 %) */
+  max?: number;
 }
 
-/** Sleep stages in rows (Sveglio, REM, Leggero, Profondo) with an optional line on top (heart rate, SpO2, breathing). */
-export function Hypnogram({ segments, from, to, height = 170, overlay }: { segments: SleepSegment[]; from: number; to: number; height?: number; overlay?: Overlay | null }) {
+/**
+ * Sleep stages in rows (Sveglio, REM, Leggero, Profondo; `rows` leaves out the stages a device does
+ * not measure) with an optional line on top (heart rate, SpO2, breathing). The rows' background is
+ * the plot area: the line and its dots stay inside it.
+ */
+export function Hypnogram({
+  segments,
+  from,
+  to,
+  height = 170,
+  overlay,
+  rows = HYPNOGRAM_ROWS,
+}: {
+  segments: SleepSegment[];
+  from: number;
+  to: number;
+  height?: number;
+  overlay?: Overlay | null;
+  rows?: number[];
+}) {
   const [ref, { width: w }] = useSize<HTMLDivElement>();
   const padL = 62;
   const padR = overlay ? 34 : 4;
   const padB = 20;
   const plotW = Math.max(1, w - padL - padR);
   const plotH = height - padB;
-  const rowH = plotH / 4;
+  const rowH = plotH / rows.length;
+  const rowOf = (stage: number) => rows.indexOf(stage);
   const ix = useChartInteraction({ ref, from, to, plotLeft: padL, plotWidth: plotW, zoomable: true });
   const { from: vf, to: vt } = ix.view;
   const clip = useClipId();
@@ -832,8 +868,13 @@ export function Hypnogram({ segments, from, to, height = 170, overlay }: { segme
       if (p.value < mn) mn = p.value;
       if (p.value > mx) mx = p.value;
     }
-    return mn <= mx ? [niceFloor(mn * 0.95), niceCeil(mx * 1.05)] : [0, 1];
+    if (mn > mx) return [0, 1];
+    const hi = Math.min(overlay?.max ?? Infinity, niceCeil(mx * 1.05));
+    return [Math.min(niceFloor(mn * 0.95), hi - 1), hi];
   }, [overlay]);
+  // the line's break and the reading's reach follow the series' own interval (core/line-gaps)
+  const [gap, reach] = useMemo(() => [lineGap(overlay?.points ?? [], 900), readingReach(overlay?.points ?? [], 900)], [overlay]);
+  const lonely = useMemo(() => isolatedPoints(overlay?.points ?? [], gap), [overlay, gap]);
 
   const x = (t: number) => padL + ((t - vf) / (vt - vf || 1)) * plotW;
   const yO = (v: number) => 4 + (plotH - 8) - ((v - oLo) / (oHi - oLo || 1)) * (plotH - 8);
@@ -843,10 +884,12 @@ export function Hypnogram({ segments, from, to, height = 170, overlay }: { segme
     const { ticks, label } = hourTicks(vf, vt, plotW, w > 480);
     return (
       <g>
-        {[1, 4, 2, 3].map((st) => (
+        {/* the plot area: one background under every row, every other row a little darker */}
+        <rect x={padL} y={0} width={plotW} height={plotH} fill="var(--chart-grid)" opacity={0.3} />
+        {rows.map((st, i) => (
           <g key={st}>
-            <rect x={padL} y={STAGE_ROW[st] * rowH} width={plotW} height={rowH} fill={st % 2 ? "transparent" : "var(--chart-grid)"} opacity={0.5} />
-            <text x={padL - 8} y={STAGE_ROW[st] * rowH + rowH / 2 + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
+            {i % 2 === 1 && <rect x={padL} y={i * rowH} width={plotW} height={rowH} fill="var(--chart-grid)" opacity={0.45} />}
+            <text x={padL - 8} y={i * rowH + rowH / 2 + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
               {STAGE_LABEL[st]}
             </text>
           </g>
@@ -866,41 +909,49 @@ export function Hypnogram({ segments, from, to, height = 170, overlay }: { segme
           ))}
       </g>
     );
-  }, [w, vf, vt, padR, height, overlay, oLo, oHi]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [w, vf, vt, padR, height, overlay, oLo, oHi, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // built once per data change, in seconds since `from` (see toView)
   const data = useMemo(() => {
     let path = "";
     let prev: number | null = null;
     for (const p of overlay?.points ?? []) {
-      path += `${prev === null || p.timestamp - prev > 900 ? "M" : "L"}${p.timestamp - from},${yO(p.value).toFixed(1)}`;
+      path += `${prev === null || p.timestamp - prev > gap ? "M" : "L"}${p.timestamp - from},${yO(p.value).toFixed(1)}`;
       prev = p.timestamp;
     }
     return (
       <>
-        {segments.map((s) => (
-          <rect
-            key={`${s.start}:${s.end}`}
-            x={s.start - from}
-            y={STAGE_ROW[s.stage] * rowH + 3}
-            width={Math.max(0, s.end - s.start)}
-            height={rowH - 6}
-            fill={STAGE_COLOR[s.stage]}
-            opacity={overlay ? 0.75 : 1}
-          />
-        ))}
+        {segments
+          .filter((s) => rowOf(s.stage) >= 0)
+          .map((s) => (
+            <rect
+              key={`${s.start}:${s.end}`}
+              x={s.start - from}
+              y={rowOf(s.stage) * rowH + 3}
+              width={Math.max(0, s.end - s.start)}
+              height={rowH - 6}
+              fill={STAGE_COLOR[s.stage]}
+              opacity={overlay ? 0.75 : 1}
+            />
+          ))}
         {overlay && <path d={path} fill="none" stroke={overlay.color} strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
       </>
     );
-  }, [segments, overlay, from, height, oLo, oHi]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [segments, overlay, from, height, oLo, oHi, gap, rows]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // a measure with no neighbour before the break: a dot (view coordinates, so it stays round)
+  const dots =
+    w > 0 &&
+    overlay &&
+    lonely.filter((p) => p.timestamp >= vf && p.timestamp <= vt).map((p) => <circle key={p.timestamp} cx={x(p.timestamp)} cy={yO(p.value)} r={2.5} fill={overlay.color} data-isolated="" />);
 
   let hover: ReactNode = null;
   if (ix.hoverX !== null && w > 0) {
     const hx = clamp(ix.hoverX, padL, padL + plotW);
     const t = vf + ((hx - padL) / plotW) * (vt - vf);
-    const seg = segments.find((s) => t >= s.start && t < s.end);
+    const seg = segments.find((s) => t >= s.start && t < s.end && rowOf(s.stage) >= 0);
     const near = overlay ? nearestPoint(overlay.points, t) : null;
-    const ov = near && Math.abs(near.timestamp - t) <= 900 ? near : null;
+    const ov = near && Math.abs(near.timestamp - t) <= reach ? near : null;
     const lines: TipLine[] = [];
     if (seg) lines.push({ text: `${STAGE_LABEL[seg.stage]} ${fmtTime(seg.start)}–${fmtTime(seg.end)}`, color: STAGE_COLOR[seg.stage] });
     if (ov && overlay) lines.push({ text: `${fmt1(ov.value)} ${overlay.unit}`, color: overlay.color });
@@ -918,12 +969,13 @@ export function Hypnogram({ segments, from, to, height = 170, overlay }: { segme
     <Surface boxRef={ref} ix={ix} width={w} height={height} rangeLabel={hoursLabel}>
       <defs>
         <clipPath id={clip}>
-          <rect x={padL} y={0} width={plotW} height={height} />
+          <rect x={padL} y={0} width={plotW} height={plotH} />
         </clipPath>
       </defs>
       {axes}
       <g clipPath={`url(#${clip})`}>
         <g transform={toView(from, ix.view, padL, plotW)}>{data}</g>
+        {dots}
       </g>
       {hover}
     </Surface>
@@ -947,6 +999,9 @@ export function ActivitySleepChart({ slots, hr, from, to, height = 190 }: { slot
   const clip = useClipId();
   const hrMax = useMemo(() => hr.reduce((m, h) => Math.max(m, h.value), 120), [hr]);
   const hrMin = 40;
+  // the line's break and the reading's reach follow the series' own interval (core/line-gaps)
+  const [hrGap, hrReach] = useMemo(() => [lineGap(hr, 1800), readingReach(hr, 600)], [hr]);
+  const hrLonely = useMemo(() => isolatedPoints(hr, hrGap), [hr, hrGap]);
 
   const x = (t: number) => padL + ((t - vf) / (vt - vf || 1)) * plotW;
   const yHr = (v: number) => 6 + plotH - ((v - hrMin) / (hrMax - hrMin)) * plotH;
@@ -978,7 +1033,7 @@ export function ActivitySleepChart({ slots, hr, from, to, height = 190 }: { slot
     let d = "";
     let prev: number | null = null;
     for (const p of hr) {
-      d += `${prev === null || p.timestamp - prev > 1800 ? "M" : "L"}${p.timestamp - from},${yHr(p.value).toFixed(1)}`;
+      d += `${prev === null || p.timestamp - prev > hrGap ? "M" : "L"}${p.timestamp - from},${yHr(p.value).toFixed(1)}`;
       prev = p.timestamp;
     }
     // one path per color instead of one <rect> per slot (adjacent slots join without seams)
@@ -993,7 +1048,9 @@ export function ActivitySleepChart({ slots, hr, from, to, height = 190 }: { slot
         <path d={d} fill="none" stroke="var(--heart)" strokeWidth={1.4} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </>
     );
-  }, [slots, hr, from, height, hrMax]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slots, hr, from, height, hrMax, hrGap]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hrDots =
+    w > 0 && hrLonely.filter((p) => p.timestamp >= vf && p.timestamp <= vt).map((p) => <circle key={p.timestamp} cx={x(p.timestamp)} cy={yHr(p.value)} r={2.5} fill="var(--heart)" />);
 
   let hover: ReactNode = null;
   if (ix.hoverX !== null && w > 0) {
@@ -1001,7 +1058,7 @@ export function ActivitySleepChart({ slots, hr, from, to, height = 190 }: { slot
     const t = vf + ((hx - padL) / plotW) * (vt - vf);
     const slot = slots.find((s) => t >= s.t && t < s.t + 300);
     const near = nearestPoint(hr, t);
-    const h = near && Math.abs(near.timestamp - t) <= 600 ? near : null;
+    const h = near && Math.abs(near.timestamp - t) <= hrReach ? near : null;
     const lines: TipLine[] = [];
     if (slot?.label) lines.push({ text: slot.label, color: slot.color });
     if (h) lines.push({ text: `${fmtInt(h.value)} bpm`, color: "var(--heart)" });
@@ -1025,6 +1082,7 @@ export function ActivitySleepChart({ slots, hr, from, to, height = 190 }: { slot
       {axes}
       <g clipPath={`url(#${clip})`}>
         <g transform={toView(from, ix.view, padL, plotW)}>{data}</g>
+        {hrDots}
       </g>
       {hover}
     </Surface>

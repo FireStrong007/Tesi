@@ -73,6 +73,7 @@ import { STRESS_LEVELS, STRESS_MIN_VALID, getValidDayHours, intensityScore, rema
 import { loadRange, type DayAgg, type RangeData } from "@bridge/core/range-data";
 import { navigate, query, usePath } from "@/lib/router";
 import { cn } from "@/lib/utils";
+import { hypnogramRows, stageColor, stageEntries, stageLabel, tiledStages, type StageKey } from "@/lib/sleep-stages";
 import { stressLabel } from "./dashboard";
 
 type Icon = ComponentType<{ className?: string }>;
@@ -100,6 +101,11 @@ const METRICS = ALL_METRICS.filter(
 );
 /** the resting heart rate of «Battito» (line, dots, tile): Gima watches do not measure it */
 const RESTING = sectionMode("resting_hr");
+/** REM and the restless moments: not measured by the Gima watches (brand.ts) */
+const REM = sectionMode("rem");
+const RESTLESS = sectionMode("restless");
+/** SpO2 is a percentage: no axis goes above 100 */
+const SPO2_MAX = 100;
 type MetricId = string;
 type SleepMinutes = { deep: number; light: number; rem: number; awake: number };
 
@@ -424,12 +430,16 @@ const Loading = () => (
   </div>
 );
 
-const stageMinutes = (m: { deep: number; light: number; rem: number; awake: number }) => [
-  { label: "Profondo", value: m.deep, color: STAGE_COLOR[3] },
-  { label: "Leggero", value: m.light, color: STAGE_COLOR[2] },
-  { label: "REM", value: m.rem, color: STAGE_COLOR[4] },
-  { label: "Sveglio", value: m.awake, color: STAGE_COLOR[1] },
-];
+/** the stages this app draws (ring, bars, legends): no REM where the device does not measure it */
+const stageMinutes = (m: SleepMinutes) => stageEntries(m, REM);
+
+/** one tile per stage; REM "unavailable" keeps its tile with the notice */
+const stageTiles = (m: SleepMinutes, suffix = "", sub?: (k: StageKey) => string | undefined) =>
+  tiledStages(REM).map((k) =>
+    k === "rem" && REM === "unavailable"
+      ? { label: `${stageLabel(k)}${suffix}`, value: "–", sub: NOT_AVAILABLE }
+      : { label: `${stageLabel(k)}${suffix}`, value: fmtMinutes(m[k]), color: stageColor(k), sub: sub?.(k) },
+  );
 
 const sleepBand = (d: DayData) => (d.sleep ? [{ start: d.sleep.start, end: d.sleep.end, color: "color-mix(in oklch, var(--sleep-light) 12%, transparent)" }] : []);
 
@@ -474,7 +484,7 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
                 { label: "Attività intensa", color: "var(--calories)" },
                 { label: "Leggero", color: STAGE_COLOR[2] },
                 { label: "Profondo", color: STAGE_COLOR[3] },
-                { label: "REM", color: STAGE_COLOR[4] },
+                ...(REM === "shown" ? [{ label: "REM", color: STAGE_COLOR[4] }] : []),
                 { label: "Sveglio", color: STAGE_COLOR[1] },
                 { label: "Non indossato", color: "var(--muted-foreground)" },
                 { label: "Battito", color: "var(--heart)" },
@@ -717,7 +727,7 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
           }
         >
           <ChartCard title="Saturazione (SpO₂)">
-            <TimeChart from={d.from - 6 * 3600} to={d.to} yMin={80} yMax={100} height={240} series={[{ points: d.spo2, color: "var(--spo2)", dots: true, gap: 3600, label: "%" }]} />
+            <TimeChart from={d.from - 6 * 3600} to={d.to} yMin={80} yMax={SPO2_MAX} height={240} series={[{ points: d.spo2, color: "var(--spo2)", dots: true, gap: 3600, label: "%" }]} />
           </ChartCard>
         </MetricLayout>
       );
@@ -799,7 +809,7 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
           }
         >
           <ChartCard title="Temperatura corporea">
-            <TimeChart from={d.from} to={d.to} yMin={34} yMax={39} height={240} format={(v) => fmt1(v)} series={[{ points: t, color: "var(--temp)", dots: true, gap: 3600, label: "°C" }]} />
+            <TimeChart from={d.from} to={d.to} yMin={Math.min(34, Math.floor(st.min ?? 34))} yMax={Math.max(39, Math.ceil(st.max ?? 39))} height={240} format={(v) => fmt1(v)} series={[{ points: t, color: "var(--temp)", dots: true, gap: 3600, label: "°C" }]} />
           </ChartCard>
         </MetricLayout>
       );
@@ -830,7 +840,7 @@ function SleepDay({ d, goal }: { d: DayData; goal: number }) {
   const total = sleepTotal(s);
   const points = { hr: d.sleepHr, spo2: d.sleepSpo2, resp: d.sleepResp };
   const ov = OVERLAYS.find((o) => o.id === overlayId);
-  const overlay: Overlay | null = ov && points[ov.id].length ? { points: points[ov.id], color: ov.color, label: ov.label, unit: ov.unit } : null;
+  const overlay: Overlay | null = ov && points[ov.id].length ? { points: points[ov.id], color: ov.color, label: ov.label, unit: ov.unit, max: ov.id === "spo2" ? SPO2_MAX : undefined } : null;
   const debt = Math.max(0, goal - total);
   return (
     <MetricLayout
@@ -844,7 +854,7 @@ function SleepDay({ d, goal }: { d: DayData; goal: number }) {
             </SegmentRing>
           }
         >
-          <Tiles items={stageMinutes(s.minutes).map((x) => ({ label: x.label, value: fmtMinutes(x.value), color: x.color, sub: total ? `${Math.round((x.value / (total + s.minutes.awake)) * 100)}%` : undefined }))} />
+          <Tiles items={stageTiles(s.minutes, "", (k) => (total ? `${Math.round((s.minutes[k] / (total + s.minutes.awake)) * 100)}%` : undefined))} />
         </SummaryCard>
       }
     >
@@ -876,18 +886,20 @@ function SleepDay({ d, goal }: { d: DayData; goal: number }) {
           </div>
         }
       >
-        <Hypnogram segments={s.segments} from={s.start} to={s.end} height={220} overlay={overlay} />
+        <Hypnogram segments={s.segments} from={s.start} to={s.end} height={220} overlay={overlay} rows={hypnogramRows(REM)} />
         <Legend items={[...stageMinutes(s.minutes).map((x) => ({ label: x.label, color: x.color })), ...(overlay ? [{ label: overlay.label, color: overlay.color }] : [])]} />
       </ChartCard>
       <Card className="py-4">
         <CardContent className="px-4">
           <Tiles
-            cols={4}
+            cols={RESTLESS === "hidden" ? 3 : 4}
             items={[
               { label: "Battito minimo", value: fmtInt(d.sleepHrStats.min), unit: "bpm", color: "var(--heart)" },
               { label: "Battito massimo", value: fmtInt(d.sleepHrStats.max), unit: "bpm", color: "var(--heart)" },
               { label: "Battito medio", value: fmtInt(d.sleepHrStats.avg), unit: "bpm", color: "var(--heart)" },
-              { label: "Momenti di irrequietezza", value: fmtInt(d.restlessMoments), color: STAGE_COLOR[1] },
+              ...(RESTLESS === "hidden"
+                ? []
+                : [RESTLESS === "unavailable" ? { label: "Momenti di irrequietezza", value: "–", sub: NOT_AVAILABLE } : { label: "Momenti di irrequietezza", value: fmtInt(d.restlessMoments), color: STAGE_COLOR[1] }]),
             ]}
           />
         </CardContent>
@@ -1329,7 +1341,7 @@ function buildRange(tab: MetricId, r: RangeData, user: Person, labelOf: (d: numb
             <Center value={fmtMinutes(avg)} label="media per notte" />
           </SegmentRing>
         ),
-        tiles: stageMinutes({ deep: avgStage("deep"), light: avgStage("light"), rem: avgStage("rem"), awake: avgStage("awake") }).map((x) => ({ label: `${x.label} (media)`, value: fmtMinutes(x.value), color: x.color })),
+        tiles: stageTiles({ deep: avgStage("deep"), light: avgStage("light"), rem: avgStage("rem"), awake: avgStage("awake") }, " (media)"),
         chartTitle: "Sonno per notte",
         items: r.days.map((d, i) => {
           const s = r.sleep[i];
@@ -1490,6 +1502,7 @@ function buildRange(tab: MetricId, r: RangeData, user: Person, labelOf: (d: numb
         axis: (v) => fmtInt(v),
         valueFormat: f,
         yMin: tab === "spo2" ? 80 : 0,
+        yMax: tab === "spo2" ? SPO2_MAX : undefined,
       };
     }
 

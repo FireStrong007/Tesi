@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config";
 // checks once for the whole run that data/ is unchanged (vitest.global-setup.ts)
 export default defineConfig({
   test: {
-    projects: ["packages/core", "packages/core/vitest.other-tz.config.ts", "packages/synth", "packages/server"],
+    projects: ["packages/core", "packages/core/vitest.other-tz.config.ts", "packages/synth", "packages/server", "apps/web"],
     globalSetup: ["./vitest.global-setup.ts"],
   },
 });
