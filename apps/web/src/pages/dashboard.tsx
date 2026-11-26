@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { BatteryChargingIcon, BrainIcon, DropletIcon, FlameIcon, FootprintsIcon, HeartPulseIcon, MoonIcon, RefreshCwIcon, WavesIcon, WindIcon, ZapIcon } from "lucide-react";
+import { BatteryChargingIcon, BrainIcon, DropletIcon, FlameIcon, FootprintsIcon, GaugeIcon, HeartPulseIcon, MoonIcon, RefreshCwIcon, ThermometerIcon, WavesIcon, WindIcon, ZapIcon } from "lucide-react";
 import { useApp } from "@/app-context";
-import { NOT_AVAILABLE, sectionMode } from "@/brand";
+import { BRAND, NOT_AVAILABLE, sectionMode } from "@/brand";
 import { DayRing, Legend } from "@/components/charts/charts";
 import { DateNav, PageBody, PageHeader } from "@/components/page";
 import { Button } from "@/components/ui/button";
@@ -9,10 +9,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useQuery } from "@/hooks/use-query";
 import { loadDay } from "@bridge/core/day-data";
-import { estimatedLabel, fmtDateTime, fmtDistance, fmtInt, fmtMinutes, fmt1 } from "@bridge/core/format";
+import { addDays, bloodPressureSamples, lastBloodPressure } from "@bridge/core/db/queries";
+import { estimatedLabel, fmtDateTime, fmtDayTitle, fmtDistance, fmtInt, fmtMinutes, fmtTime, fmt1 } from "@bridge/core/format";
 import { restingCalories, stressLevelOf } from "@bridge/core/metrics";
 import { startOfDay } from "@bridge/core/time-zone";
 import { NEVER_SHORT } from "@/lib/empty-states";
+import { EcgHomeCard } from "@/pages/ecg";
 import { navigate } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
@@ -63,6 +65,51 @@ export function SyncButton() {
   );
 }
 
+/**
+ * HeartBridge's «Pressione» on the Home: the latest measurement up to the day shown, and the
+ * average of the 7 days ending with it. No clinical classification.
+ */
+function PressureCard({ day }: { day: number }) {
+  const { db, user, dataVersion } = useApp();
+  const end = addDays(day, 1);
+  const { data } = useQuery(
+    async () => ({ last: await lastBloodPressure(db, user.id, end), week: await bloodPressureSamples(db, user.id, addDays(day, -6), end) }),
+    [day, user.id, dataVersion],
+  );
+  const avg = (k: "systolic" | "diastolic") => (data?.week.length ? data.week.reduce((s, x) => s + x[k], 0) / data.week.length : null);
+  const go = () => navigate(`/charts?tab=bp&day=${day}&period=week`);
+  return (
+    <button onClick={go} className="bg-card hover:bg-accent/40 flex w-full flex-col gap-3 rounded-xl border p-4 text-left shadow-sm transition-colors">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-full [&_svg]:size-4" style={{ background: "color-mix(in oklch, var(--bp-sys) 18%, transparent)", color: "var(--bp-sys)" }}>
+          <GaugeIcon />
+        </span>
+        Pressione
+      </div>
+      {data && !data.last ? (
+        <div className="text-muted-foreground text-sm">Nessuna misura della pressione.</div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <div className="min-w-0">
+            <div className="text-muted-foreground text-xs">Ultima misura</div>
+            <div className="tabular text-2xl font-semibold">
+              {data?.last ? `${data.last.systolic}/${data.last.diastolic}` : "–"} <span className="text-muted-foreground text-sm font-normal">mmHg</span>
+            </div>
+            <div className="text-muted-foreground truncate text-xs">{data?.last ? `${fmtDayTitle(data.last.timestamp)}, ${fmtTime(data.last.timestamp)}` : ""}</div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-muted-foreground text-xs">Media degli ultimi 7 giorni</div>
+            <div className="tabular text-2xl font-semibold">
+              {data?.week.length ? `${fmtInt(avg("systolic"))}/${fmtInt(avg("diastolic"))}` : "–"} <span className="text-muted-foreground text-sm font-normal">mmHg</span>
+            </div>
+            <div className="text-muted-foreground text-xs">{data?.week.length ? `${data.week.length} misure` : "nessuna misura"}</div>
+          </div>
+        </div>
+      )}
+    </button>
+  );
+}
+
 export function DashboardPage() {
   const { db, user, available, dataVersion } = useApp();
   const [day, setDay] = useState(() => startOfDay(Date.now() / 1000));
@@ -91,7 +138,7 @@ export function DashboardPage() {
             </button>
             <div className="grid w-full flex-1 grid-cols-3 gap-4 sm:grid-cols-2">
               <MiniStat label={estimatedLabel("Distanza", d?.distanceM ?? 0, d?.distanceEstimatedM ?? 0)} value={fmtDistance(d?.distanceM ?? 0)} />
-              <MiniStat label="Minuti attivi" value={fmtInt(d?.activeMinutes ?? 0)} />
+              {BRAND.activeMinutes ? <MiniStat label="Minuti attivi" value={fmtInt(d?.activeMinutes ?? 0)} /> : <MiniStat label="Battito medio" value={d?.hrAvg != null ? `${fmtInt(d.hrAvg)} bpm` : "–"} />}
               <MiniStat label="Calorie attive" value={`${fmtInt(d?.activeCalories ?? 0)} kcal`} />
               <MiniStat label="Sonno" value={d?.sleep ? fmtMinutes(d.sleepMinutes) : "–"} className="hidden sm:block" />
               <div className="col-span-3 sm:col-span-2">
@@ -107,6 +154,9 @@ export function DashboardPage() {
             </div>
           </CardContent>
         </Card>
+
+        {BRAND.ecg && <EcgHomeCard />}
+        {BRAND.bloodPressure && <PressureCard day={day} />}
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
           <Tile icon={<FootprintsIcon />} label="Passi" color="var(--steps)" value={fmtInt(steps)} sub={available.steps ? `Obiettivo ${fmtInt(user.step_goal)}` : NEVER_SHORT} onClick={() => go("steps")}>
@@ -149,16 +199,40 @@ export function DashboardPage() {
             </Tile>
           )}
           {sectionMode("energy") === "unavailable" && <Tile icon={<BatteryChargingIcon />} label="Body Battery" color="var(--energy)" value="–" sub={NOT_AVAILABLE} />}
-          <Tile icon={<DropletIcon />} label="SpO₂" color="var(--spo2)" value={fmtInt(d?.spo2Avg)} unit="%" sub={d?.spo2Avg != null ? "Media notturna" : none("spo2")} onClick={() => go("spo2")} />
-          <Tile
-            icon={<WavesIcon />}
-            label="HRV"
-            color="var(--hrv)"
-            value={fmtInt(d?.hrv?.last_night_average)}
-            unit="ms"
-            sub={d?.hrv ? `${HRV_STATUS[d.hrv.status ?? 0]} · media 7 gg ${fmtInt(d.hrv.weekly_average)}` : none("hrv")}
-            onClick={() => go("hrv")}
-          />
+          <Tile icon={<DropletIcon />} label="SpO₂" color="var(--spo2)" value={fmtInt(d?.spo2Avg)} unit="%" sub={d?.spo2Avg != null ? (BRAND.id === "vitabridge" ? "Media notturna" : "Media") : none("spo2")} onClick={() => go("spo2")} />
+          {d?.hrv || !d?.hrvValues.length ? (
+            <Tile
+              icon={<WavesIcon />}
+              label="HRV"
+              color="var(--hrv)"
+              value={fmtInt(d?.hrv?.last_night_average)}
+              unit="ms"
+              sub={d?.hrv ? `${HRV_STATUS[d.hrv.status ?? 0]} · media 7 gg ${fmtInt(d.hrv.weekly_average)}` : none("hrv")}
+              onClick={() => go("hrv")}
+            />
+          ) : (
+            // Gima: the day's spot measurements, with CVRR
+            <Tile
+              icon={<WavesIcon />}
+              label="HRV"
+              color="var(--hrv)"
+              value={fmtInt(d.hrvValues.reduce((s, x) => s + x.value, 0) / d.hrvValues.length)}
+              unit="ms"
+              sub={d.cvrr.length ? `Media del giorno · CVRR ${fmt1(d.cvrr.reduce((s, x) => s + x.value, 0) / d.cvrr.length)}` : "Media del giorno"}
+              onClick={() => go("hrv")}
+            />
+          )}
+          {BRAND.temperature && (
+            <Tile
+              icon={<ThermometerIcon />}
+              label="Temperatura"
+              color="var(--temp)"
+              value={d?.temperature.length ? fmt1(d.temperature.reduce((s, x) => s + x.value, 0) / d.temperature.length) : "–"}
+              unit="°C"
+              sub={d?.temperature.length ? `Media di ${d.temperature.length} misure valide` : none("temp")}
+              onClick={() => go("temp")}
+            />
+          )}
           <Tile icon={<WindIcon />} label="Respirazione" color="var(--resp)" value={fmt1(d?.respAvg)} unit="resp/min" sub={d?.respAvg != null ? "Media del giorno" : none("resp")} onClick={() => go("resp")} />
           {sectionMode("intensity") === "shown" && (
             <Tile

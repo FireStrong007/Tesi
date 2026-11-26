@@ -45,6 +45,10 @@
   --hrv: oklch(0.6 0.16 295);
   --resp: oklch(0.7 0.1 170);
   --calories: oklch(0.7 0.17 45);
+  /* HeartBridge: blood pressure (systolic darker, diastolic lighter) and body temperature */
+  --bp-sys: oklch(0.52 0.16 262);
+  --bp-dia: oklch(0.7 0.11 235);
+  --temp: oklch(0.7 0.14 85);
   --chart-grid: oklch(0.92 0.01 210);
   /* heart-rate zones 1..5 (Gadgetbridge: grey, light blue, green, orange, red) */
   --zone-1: oklch(0.7 0.02 240);
@@ -84,6 +88,8 @@
   --rmr: oklch(0.68 0.14 265);
   --sleep-deep: oklch(0.55 0.17 270);
   --compare: oklch(0.74 0.19 340);
+  --bp-sys: oklch(0.68 0.15 262);
+  --bp-dia: oklch(0.8 0.09 235);
   /* a dark card needs a denser band to read */
   --compare-band: 0.3;
   --compare-edge: 0.8;

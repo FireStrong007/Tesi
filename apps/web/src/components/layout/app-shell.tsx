@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { ChartColumnIcon, CloudOffIcon, HouseIcon, LogOutIcon, SettingsIcon, WatchIcon } from "lucide-react";
+import { ActivityIcon, ChartColumnIcon, CloudOffIcon, HouseIcon, LogOutIcon, SettingsIcon, WatchIcon } from "lucide-react";
+import { BRAND } from "@/brand";
 import { useApp } from "@/app-context";
 import { useAuth, useMe } from "@/auth";
 import { fmtRelative } from "@bridge/core/format";
@@ -9,6 +10,8 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { to: "/", label: "Home", icon: HouseIcon },
   { to: "/charts", label: "Grafici", icon: ChartColumnIcon },
+  // HeartBridge: the watch's electrocardiograms
+  ...(BRAND.ecg ? [{ to: "/ecg", label: "ECG", icon: ActivityIcon }] : []),
   { to: "/devices", label: "Dispositivi", icon: WatchIcon },
   { to: "/settings", label: "Impostazioni", icon: SettingsIcon },
 ];
@@ -74,15 +77,16 @@ export function AppShell({ children }: { children: ReactNode }) {
         {children}
       </div>
       <nav className="bg-card/95 pb-safe fixed inset-x-0 bottom-0 z-40 border-t backdrop-blur md:hidden" aria-label="Sezioni">
-        <div className="grid grid-cols-4">
+        {/* one column per section: 4 in VitaBridge, 5 with HeartBridge's ECG */}
+        <div className={cn("grid", NAV.length === 5 ? "grid-cols-5" : "grid-cols-4")}>
           {NAV.map((n) => {
             const active = isActive(path, n.to);
             return (
-              <button key={n.to} onClick={() => navigate(n.to)} aria-current={active ? "page" : undefined} className="flex flex-col items-center gap-1 py-2 text-[11px] font-medium">
-                <span className={cn("flex h-7 w-14 items-center justify-center rounded-full transition-colors", active ? "bg-accent text-accent-foreground" : "text-muted-foreground")}>
+              <button key={n.to} onClick={() => navigate(n.to)} aria-current={active ? "page" : undefined} className="flex min-w-0 flex-col items-center gap-1 py-2 text-[11px] font-medium">
+                <span className={cn("flex h-7 w-12 items-center justify-center rounded-full transition-colors", active ? "bg-accent text-accent-foreground" : "text-muted-foreground")}>
                   <n.icon className="size-5" />
                 </span>
-                <span className={active ? "text-foreground" : "text-muted-foreground"}>{n.label}</span>
+                <span className={cn("max-w-full truncate px-0.5", active ? "text-foreground" : "text-muted-foreground")}>{n.label}</span>
               </button>
             );
           })}

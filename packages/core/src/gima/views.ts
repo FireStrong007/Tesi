@@ -8,9 +8,12 @@
  * durations; body temperatures outside 30–43 °C (the real data have 0.15 °C in most rows); ECG
  * ai_heart above 300.
  *
- * - activity_sample: one row per 30-minute block (steps, distance, active calories of the block,
- *   not cumulative), at the block's start, plus one row per heart rate measurement (about every
- *   18 minutes): the valid day rule counts the hours with a heart rate like on Garmin.
+ * - DISTANCE_CM holds METERS, despite its name: the Gima app stores the watch's sportDistance as it
+ *   is (SynchronizationActivity.addActivitySample), and the real data have 0.76 per step. TODO: da
+ *   confermare con il gestore del server.
+ * - activity_sample: each 30-minute block (steps, distance, active calories of the block, not
+ *   cumulative) spread over its six 5-minute slots, plus one row per heart rate measurement (about
+ *   every 18 minutes): the valid day rule counts the hours with a heart rate like on Garmin.
  * - sleep: stages come as start + DURATION_SEC (241 deep, 242 light; any other code is unknown and
  *   counts for no stage). The app's stage rows are end boundaries (db/queries.sleepSessions), and a
  *   gap of less than 3 hours between two stages is time awake in the same night: one night can be
@@ -41,13 +44,21 @@ export const GIMA_VALID = {
 
 const since = (from: number | null, col = "TIMESTAMP") => (from == null ? "" : ` AND ${col} >= ${from * 1000}`);
 
+/**
+ * A block's steps, distance and calories spread over its 6 slots of 5 minutes, in integers whose sum
+ * is the block's (the k-th gets v·(k+1)/6 − v·k/6): the day's chart shows the block where it was,
+ * the totals do not change. The minutes inside a block are not known (no active minutes on Gima).
+ */
+const SLOTS = 6;
+const part = (col: string) => `CASE WHEN ${col} >= 0 THEN ${col} * (k + 1) / ${SLOTS} - ${col} * k / ${SLOTS} END`;
+
 const ACTIVITY: LocalView = {
   name: "activity_sample",
   select: (from) => `
-SELECT DEVICE_ID AS device_id, USER_ID AS user_id, TIMESTAMP / 1000 AS timestamp, NULL AS activity_type, NULL AS intensity,
-  CASE WHEN STEPS >= 0 THEN STEPS END AS steps, CASE WHEN DISTANCE_CM >= 0 THEN DISTANCE_CM END AS distance_cm,
-  CASE WHEN ACTIVE_CALORIES >= 0 THEN ACTIVE_CALORIES END AS active_calories, NULL AS heart_rate, 0 AS distance_missing
-FROM GIMA_ACTIVITY_SAMPLE WHERE 1${since(from)}
+SELECT DEVICE_ID AS device_id, USER_ID AS user_id, TIMESTAMP / 1000 + k * 300 AS timestamp, NULL AS activity_type, NULL AS intensity,
+  ${part("STEPS")} AS steps, ${part("DISTANCE_CM")} * 100 AS distance_cm, ${part("ACTIVE_CALORIES")} AS active_calories, NULL AS heart_rate, 0 AS distance_missing
+FROM GIMA_ACTIVITY_SAMPLE, (${Array.from({ length: SLOTS }, (_, k) => `SELECT ${k} AS k`).join(" UNION ALL ")})
+WHERE 1${since(from)}
 UNION ALL
 SELECT DEVICE_ID, USER_ID, TIMESTAMP / 1000, NULL, NULL, NULL, NULL, NULL, HEART_RATE, 0
 FROM GIMA_HEART_RATE_SAMPLE WHERE ${GIMA_VALID.heartRate}${since(from)}`,
@@ -113,7 +124,7 @@ export const GIMA_VIEWS: LocalView[] = [
     time: "stride_cm",
     whole: true,
     select: () => `SELECT user_id,
-      CASE WHEN SUM(steps > 0 AND distance_missing = 0) >= ${MIN_STRIDE_MINUTES / 30} AND SUM(CASE WHEN distance_missing = 0 THEN steps ELSE 0 END) >= ${MIN_STRIDE_STEPS}
+      CASE WHEN SUM(steps > 0 AND distance_missing = 0) >= ${MIN_STRIDE_MINUTES / 5} AND SUM(CASE WHEN distance_missing = 0 THEN steps ELSE 0 END) >= ${MIN_STRIDE_STEPS}
         THEN SUM(COALESCE(distance_cm, 0)) * 1.0 / SUM(CASE WHEN distance_missing = 0 THEN steps ELSE 0 END) END AS stride_cm
       FROM activity_sample GROUP BY user_id`,
   },

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll } from "vitest";
 import { DATASETS, type AppId } from "@bridge/core/datasets";
 import { cohortParticipants, defaultGarminParticipants, writeGarminDb } from "@bridge/synth/garmin-db";
-import { writeGimaDb } from "@bridge/synth/gima-db";
+import { defaultGimaParticipants, gimaCohortParticipants, writeGimaDb } from "@bridge/synth/gima-db";
 import { createApp, ensureFirstAdmin } from "../src/app";
 import { ComparisonService, inlineBuilder, type Builder } from "../src/comparison/service";
 import { LoginLimiter } from "../src/auth/limiter";
@@ -38,7 +38,7 @@ export function syntheticDb(app: AppId, dir: string, days = 3, cohort = 0) {
   if (!path) {
     path = join(dir, `${app}-data${cohort ? `-c${cohort}` : ""}.db`);
     if (app === "vitabridge") writeGarminDb(path, { now: NOW, participants: [...defaultGarminParticipants(), ...cohortParticipants(cohort)] });
-    else writeGimaDb(path, { now: NOW });
+    else writeGimaDb(path, { now: NOW, participants: [...defaultGimaParticipants(), ...gimaCohortParticipants(cohort)] });
     dbCache.set(key, path);
   }
   return path;

@@ -1,6 +1,6 @@
 # Stato dei lavori
 
-Ultimo aggiornamento: 25 novembre 2026, ramo `multiutente`.
+Ultimo aggiornamento: 26 novembre 2026, ramo `multiutente`.
 
 Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a che punto siamo.
 
@@ -19,8 +19,8 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 | 2. Server di lettura, login, amministrazione | fatta, con i comandi per gli amministratori |
 | 3. VitaBridge sui dati del server | fatta |
 | 4. Confronto con gli altri partecipanti | fatta |
-| 5. HeartBridge | **prossima** |
-| 6. Pubblicazione e documentazione | da fare |
+| 5. HeartBridge | fatta |
+| 6. Pubblicazione e documentazione | **prossima** |
 
 ## Cosa c'è oggi
 
@@ -155,9 +155,51 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
   - l'amministratore vede «Ricollega a SYN-G01» e ricollega;
   - il partecipante rientra e riceve i dati di SYN-G01 con il nuovo numero.
 
+### HeartBridge (Fase 5)
+- **Una sola app, due marchi:** il marchio si sceglie in compilazione (`vite --mode heartbridge`, `npm run build` compila entrambe: `apps/web/dist` e `apps/web/dist-heartbridge`). Per provare HeartBridge: `npm run dev:heartbridge` (server :8788 con `data/synthetic-gima.db`, Vite :5174; `HEARTBRIDGE_DATA_FILE` per un altro file).
+  - `apps/web/src/brand.ts` decide nome, dispositivo («orologio»), sezioni e cosa fare con quelle che l'orologio non misura.
+  - **Stress, Body Battery, minuti di intensità e battito a riposo:** «nascosta» oggi, oppure «non disponibile» (sezione visibile con «Non disponibile con questo dispositivo»), da `missing` in `brand.ts`. Il battito a riposo non viene stimato.
+  - **Colori:** corallo caldo (`#cf5539`, scuro `#f08d6a`) con icona a cuore e tracciato. In HeartBridge errori e avvisi diventano cremisi (`#b80049`) e le calorie ambra, così il corallo non si confonde con il rosso.
+  - Se l'app e il server non sono la stessa app, la pagina lo dice e non va avanti.
+- **Adattatore Gima** (`packages/core/src/gima/views.ts`): le stesse tabelle dell'app di VitaBridge.
+  - **Passi:** ogni blocco di 30 minuti è distribuito sui suoi 6 intervalli di 5 minuti, con i totali invariati. I «minuti attivi» non esistono con i blocchi: in HeartBridge non compaiono.
+  - **Battito:** circa ogni 18 minuti; il giorno valido resta quello delle 12 ore con battito.
+  - **Sonno:** una notte in più segmenti è una notte sola, le pause sono sveglio, un codice di fase sconosciuto non conta. Sui dati veri profondo e leggero coincidono con i totali dell'orologio.
+  - **Valori non validi:** filtrati in un solo punto (`GIMA_VALID`): temperatura fuori da 30–43 °C, 0 per battito, pressione, HRV, SpO2, respirazione e durata, `ai_heart` sopra 300.
+  - **Distanza:** `DISTANCE_CM` contiene **metri**, nonostante il nome. L'app Android salva `sportDistance` dell'orologio così com'è e i dati veri danno 0,76 per passo. L'adattatore converte; è da confermare con il gestore del server.
+- **Pagine:**
+  - **Home:** ECG (ultima registrazione, valori, valutazione del dispositivo, anteprima del tracciato) e Pressione (ultima misura, media degli ultimi 7 giorni); temperatura e HRV/CVRR tra le tessere.
+  - **Grafici:** Pressione (giorno: sistolica e diastolica per misura; settimana e mese: minima–massima per giorno con la media); Temperatura (solo valori validi, con la nota); HRV dai valori del giorno con il CVRR. Nessuna classificazione clinica.
+  - **ECG:** elenco del mese; tracciato su carta a 25 mm/s (quadretti da 0,04 e 0,2 s) disegnato su canvas, con scorrimento (anche al tocco) e zoom. Mostra i valori della misura, la valutazione del dispositivo con «Valutazione automatica del dispositivo, non è una diagnosi medica», l'avviso «Scala dei tempi da confermare…» e i parametri usati. Asse verticale in «unità del dispositivo», valori limitati a ±500 (picchi tagliati).
+- **Confronto:** passi, calorie, sonno, SpO2, respirazione, HRV. Pressione e temperatura sono escluse, e il server rifiuta anche le metriche che l'orologio non misura (`compareMetrics` in `datasets.ts`).
+- **Prova nel browser** (`data/synthetic-gima.db` con 100 partecipanti in più): Home, tutte le sezioni, ECG con scorrimento e zoom, Dispositivi senza batteria, «Confronta» su passi, HRV e sonno; 390 px e desktop, chiaro e scuro; nessuno scorrimento orizzontale, console pulita. VitaBridge invariata (stessa prova di «Confronta» su 9 metriche).
+
+### Frequenza e unità dell'ECG (26 novembre)
+- **Codice Gima** (`GIMASportpixSystem-Nuovo_BE.zip`, solo letto):
+  - `SynchronizationActivity.scaleSamples` filtra i campioni dell'orologio, ne fa la **media ogni 3**, li **divide per 40** e li **limita a ±500**;
+  - `Cardiograph3View` dice «采样率250 … 3个数据取平均值为一个» (frequenza 250, 3 valori mediati in uno) e disegna un punto ogni 0,012 s, cioè 83,33 punti al secondo;
+  - in quella vista 1000 unità = 1 mV, quindi forse µV, ma non è confermato;
+  - `duration_ms` è il tempo dall'inizio della misura all'invio, non la durata del tracciato. Nelle registrazioni scaricate con la sincronizzazione battito, pressione e HRV sono salvati a 0.
+- **Verifica sui 4 tracciati veri con il battito registrato:** il battito ricavato dai picchi R, alle tre frequenze candidate, confrontato con quello registrato dal dispositivo (qui solo gli scarti medi, non i valori della persona):
+
+  | Frequenza | Scarto medio dal battito registrato |
+  |---|---|
+  | **83,33 Hz (250/3)** | **1,6 bpm** |
+  | 75 Hz | 7,8 bpm |
+  | `sample_count` / `duration_ms` | 10,1 bpm |
+
+  `ai_heart` non è un riferimento utile: spesso è lontano dal battito, o sopra 300.
+- **Scelta:** 83,33 Hz come predefinito, in `packages/core/src/gima/ecg.ts`, segnato come da confermare; tracciati di circa 61 s. Finché non è confermato, il visualizzatore mostra l'avviso.
+
+### Temperatura (26 novembre)
+- **Cosa fa l'app Android:** `SynchronizationActivity` (righe 723–740) unisce due campi del protocollo, `tempIntValue + "." + tempFloatValue`, e li converte in numero. Non perde la parte intera: la prende dal campo `tempIntValue` del record.
+- **Cosa c'è nei dati veri:** le 488 temperature non valide valgono **tutte esattamente 0,15** (parte intera 0, decimali «15»). Se fosse persa la parte intera, i decimali varierebbero come in quelle valide (da ,0 a ,9).
+- **Conclusione:** è più probabile un valore fisso dell'orologio o della libreria quando la misura non c'è, non una parte intera persa dall'app. Da chiedere al gestore del server. Intanto l'app mostra solo le temperature valide (30–43 °C).
+- **Altro difetto possibile, nei soli dati:** l'unione come testo confonde i decimali a due cifre (36,05 diventerebbe «36.5»). Nei dati veri i decimali delle temperature valide sono sempre a una cifra.
+
 ### Dati per lo sviluppo
 - `data/gadgetbridge.db` e `data/GimaDB.db`: copie reali, mai in git, aperte solo in sola lettura.
-- `npm run gen:synthetic` crea `data/synthetic-garmin.db` (8 partecipanti) e `data/synthetic-gima.db` (6), con gli schemi reali e alcune sezioni volutamente vuote. Con `-- --cohort N` si aggiungono N partecipanti Garmin con profili diversi (`SYN-C001`…): **servono per provare il confronto**, perché con i soli 8 predefiniti quasi tutti i giorni hanno meno di 5 altri partecipanti. Quello in `data/` oggi ha `--cohort 100`.
+- `npm run gen:synthetic` crea `data/synthetic-garmin.db` (8 partecipanti) e `data/synthetic-gima.db` (6), con gli schemi reali e alcune sezioni volutamente vuote. `data/synthetic-gima.db` è stato rigenerato il 26 novembre con `--cohort 100` (106 partecipanti): ECG a 83,33 Hz, notti divise in due segmenti, distanza in metri come i dati veri. Con `-- --cohort N` si aggiungono N partecipanti Garmin con profili diversi (`SYN-C001`…): **servono per provare il confronto**, perché con i soli 8 predefiniti quasi tutti i giorni hanno meno di 5 altri partecipanti. Quello in `data/` oggi ha `--cohort 100`.
 - Per provare: copia `.env.example` in `.env`, imposta `ADMIN_PASSWORD`, poi `npm run dev`. Senza `AUTH_DB` ogni file di dati ha il suo file degli account; gli account creati prima del 25 novembre sono da ricreare (il vecchio `auth/vitabridge-auth.db` si può cancellare).
 
 ## Decisioni prese
@@ -173,6 +215,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 - **Obiettivi** sul server (`/api/me/settings`), **«Confronta» nascosto** fino alla Fase 4 (24 novembre).
 - **Distanza (regola B, 25 novembre):** si stima solo dove i passi non hanno nessuna distanza misurata dopo di loro nello stesso giorno: passi × passo medio della persona. Il passo medio si calcola dai suoi minuti coperti dalla distanza, se sono almeno 60 minuti e 1.000 passi; altrimenti vale il **valore predefinito di 75 cm**. Nell'interfaccia è indicata come «stimata» o «in parte stimata». È la stessa regola per tutti, anche nel confronto, perché sta nelle query di core.
 - **Sincronizzazione:** finestra di 3 giorni per tabella e per dispositivo, conteggi confrontati a ogni sincronizzazione (24 novembre).
+- **HeartBridge (26 novembre):** corallo e icona a cuore, sezioni mancanti configurabili («nascosta» oggi), ECG a 83,33 Hz da confermare con l'avviso, asse in unità del dispositivo, pressione e temperatura fuori dal confronto, battito a riposo non stimato.
 - **Account e sorgente dei dati (25 novembre):** numero e codice del partecipante controllati su ogni richiesta; ricollegamento solo dall'amministratore, con un clic; account senza codice da ricreare; database degli account legato alla sorgente, `admin:accept-source` per accettarne una spostata; copia del browser legata ad account, partecipante e sorgente.
 - **Confronto (Fase 4, 25 novembre):** parole «partecipante tipico (mediana)», «metà dei partecipanti», «media (n = …)»; il giorno in corso è escluso dal valore del periodo fino a mezzanotte; «Confronta» resta uno stato della pagina; il calcolo è sul server, con la cache precedente usata finché la nuova non è pronta.
 - **Frase di riepilogo (25 novembre):** solo sui giorni (settimane) confrontabili, detto nella frase; «Hai più minuti di circa 40 partecipanti su 100» con il verbo della metrica; messaggio esplicito quando nessun altro ha dati.
@@ -188,7 +231,10 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
   - `tests/sleep.test.ts` (in `main`, `legacy-bluetooth`, `formato-server`; in `multiutente` spostato in `packages/core/tests/sleep.test.ts`): la notte 2→3 novembre 2026, con numero di serie del bracciale, orari di inizio e fine, le 11 fasi con l'orario, punteggio 77;
   - `tests/metrics.test.ts` e un commento di `metrics.ts`: metabolismo a riposo 1.899 kcal/giorno e 1.404 kcal «a riposo» alle 17:44 del 3/11.
 - **Formato di `GET /admin/backup`:** da confermare con il gestore del server. Oggi si accetta un file SQLite, anche compresso con gzip.
-- **Frequenza di campionamento e unità degli ECG:** 250 Hz secondo il codice Gima, circa 74 Hz secondo `duration_ms` dei dati reali (Fase 5).
+- **Da confermare con il gestore del server:**
+  - frequenza dell'ECG (83,33 Hz) e unità dei campioni (forse µV);
+  - `DISTANCE_CM` in metri;
+  - il valore 0,15 °C delle temperature (`packages/core/src/gima/ecg.ts`, `gima/views.ts`).
 - **Da discutere: soglia del confronto.** Con soglia 5 la mediana coincide spesso con il valore di un singolo partecipante (con 5 valori è il terzo). Quando i partecipanti saranno molti, valutare di alzare la soglia: è già configurabile con `COMPARE_MIN_PARTICIPANTS` (predefinita 5, non meno di 5).
 - **Tempo della cache del confronto con molti partecipanti:** cresce circa in proporzione ai giorni-persona (28 s per 108 persone × 28 giorni). Non blocca le risposte (si usa la cache precedente), ma con centinaia di partecipanti e mesi di dati si potrebbe aggiornare solo i giorni nuovi, come nel browser.
 - **Avviso del worker SQLite** in console («Ignoring inability to install OPFS sqlite3_vfs»): innocuo, l'app usa `opfs-sahpool`. C'era già prima.

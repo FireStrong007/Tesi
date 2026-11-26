@@ -3,7 +3,10 @@ import { STAGE_COLOR, STAGE_LABEL } from "./colors";
 import {
   activitySamples,
   addDays,
+  bloodPressureSamples,
   bodyEnergySamples,
+  cvrrSamples,
+  hrvValueSamples,
   hrvSummaries,
   intensityMinutes,
   liveSamples,
@@ -13,7 +16,9 @@ import {
   sleepTotal,
   spo2Samples,
   stressSamples,
+  temperatureSamples,
   type ActivityRow,
+  type BloodPressure,
   type HrvSummary,
   type SleepSession,
   type TimeValue,
@@ -62,6 +67,12 @@ export interface DayData {
   sleep: SleepSession | null;
   sleepMinutes: number;
   hrv: HrvSummary | null;
+  /** the day's HRV values and CVRR (Gima: spot measurements; Garmin: the night's values) */
+  hrvValues: TimeValue[];
+  cvrr: TimeValue[];
+  /** HeartBridge: blood pressure measurements and body temperatures (valid values only) */
+  bloodPressure: BloodPressure[];
+  temperature: TimeValue[];
   /** running totals during the day (charts "Passi" and "Calorie") */
   stepsCumulative: TimeValue[];
   caloriesCumulative: TimeValue[];
@@ -96,6 +107,12 @@ export async function loadDay(db: SqlExecutor, userId: number, from: number): Pr
     sleepSessions(db, userId, from - 12 * 3600, to),
     intensityMinutes(db, userId, from, to),
     liveSamples(db, userId, from - 6 * 3600, to),
+  ]);
+  const [hrvValues, cvrr, bloodPressure, temperature] = await Promise.all([
+    hrvValueSamples(db, userId, from, to),
+    cvrrSamples(db, userId, from, to).then((r) => r.filter((x) => x.value != null)),
+    bloodPressureSamples(db, userId, from, to),
+    temperatureSamples(db, userId, from, to),
   ]);
   const [rmrRow, restlessRows, sleepHrRows] = await Promise.all([
     db.all<{ rate: number }>("SELECT rate FROM resting_metabolic_rate_sample WHERE user_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT 1", [userId, to]),
@@ -223,6 +240,10 @@ export async function loadDay(db: SqlExecutor, userId: number, from: number): Pr
     sleep,
     sleepMinutes: sleep ? sleepTotal(sleep) : 0,
     hrv: hrvs.length ? hrvs[hrvs.length - 1] : null,
+    hrvValues,
+    cvrr,
+    bloodPressure,
+    temperature,
     stepsCumulative: cumulative(samples, (r) => r.steps, from),
     caloriesCumulative: cumulative(samples, (r) => r.active_calories, from),
     rmr: rmrRow[0]?.rate ?? null,
@@ -236,6 +257,6 @@ export async function loadDay(db: SqlExecutor, userId: number, from: number): Pr
     restlessMoments: restless?.count ?? null,
     slots,
     ring,
-    hasData: samples.length > 0 || !!sleep || stress.length > 0,
+    hasData: samples.length > 0 || !!sleep || stress.length > 0 || bloodPressure.length > 0,
   };
 }

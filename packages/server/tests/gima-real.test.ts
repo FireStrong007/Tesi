@@ -62,6 +62,10 @@ describe.skipIf(!present)("Gima adapter on the real database", () => {
       expect(all(`SELECT count(*) AS n FROM temp.${table} WHERE ${col} <= 0`).n, table).toBe(0);
     expect(all("SELECT count(*) AS n FROM temp.activity_sample WHERE heart_rate <= 0").n).toBe(0);
     expect((await db.all("SELECT 1 FROM temp.ecg_recording WHERE ai_heart > 300")).length).toBe(0);
+    // DISTANCE_CM holds meters: an ordinary step length once converted
+    const stride = all("SELECT sum(distance_cm) * 1.0 / sum(steps) AS cm FROM temp.activity_sample WHERE steps > 0").cm;
+    expect(stride).toBeGreaterThan(50);
+    expect(stride).toBeLessThan(110);
     raw.close();
   });
 

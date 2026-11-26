@@ -30,6 +30,8 @@ export interface Brand {
   temperature: boolean;
   /** the device reports its battery (Garmin BATTERY_LEVEL) */
   battery: boolean;
+  /** minutes with activity are known (Garmin, per minute); not with 30-minute blocks (Gima) */
+  activeMinutes: boolean;
 }
 
 const BRANDS: Record<AppId, Brand> = {
@@ -43,6 +45,7 @@ const BRANDS: Record<AppId, Brand> = {
     bloodPressure: false,
     temperature: false,
     battery: true,
+    activeMinutes: true,
   },
   heartbridge: {
     id: "heartbridge",
@@ -55,6 +58,7 @@ const BRANDS: Record<AppId, Brand> = {
     bloodPressure: true,
     temperature: true,
     battery: false,
+    activeMinutes: false,
   },
 };
 

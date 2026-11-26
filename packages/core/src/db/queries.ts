@@ -128,6 +128,11 @@ export interface BloodPressure {
   systolic: number;
   diastolic: number;
 }
+/** the latest blood pressure measurement before `before` (the Home's «ultima misura») */
+export async function lastBloodPressure(db: SqlExecutor, userId: number, before: number): Promise<BloodPressure | null> {
+  const [r] = await db.all<BloodPressure>("SELECT timestamp, systolic, diastolic FROM blood_pressure_sample WHERE user_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT 1", [userId, before]);
+  return r ?? null;
+}
 export const bloodPressureSamples = (db: SqlExecutor, userId: number, from: number, to: number) =>
   db.all<BloodPressure>("SELECT timestamp, systolic, diastolic FROM blood_pressure_sample WHERE user_id = ? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp", [userId, from, to]);
 export const heartRateSamples = (db: SqlExecutor, userId: number, from: number, to: number) =>

@@ -12,7 +12,9 @@ import {
   DropletIcon,
   FlameIcon,
   FootprintsIcon,
+  GaugeIcon,
   HeartPulseIcon,
+  ThermometerIcon,
   UsersIcon,
   MoonIcon,
   WavesIcon,
@@ -80,11 +82,14 @@ const ALL_METRICS: { id: string; label: string; icon: Icon; color: string; perio
   { id: "energy", label: "Body Battery", icon: BatteryChargingIcon, color: "var(--energy)", periods: ["day", "week", "month"] },
   { id: "spo2", label: "SpO₂", icon: DropletIcon, color: "var(--spo2)", periods: ["day", "week", "month"] },
   { id: "resp", label: "Respirazione", icon: WindIcon, color: "var(--resp)", periods: ["day", "week", "month"] },
+  // HeartBridge's own: blood pressure and body temperature (brand.ts)
+  { id: "bp", label: "Pressione", icon: GaugeIcon, color: "var(--bp-sys)", periods: ["day", "week", "month"] },
+  { id: "temp", label: "Temperatura", icon: ThermometerIcon, color: "var(--temp)", periods: ["day", "week", "month"] },
   { id: "hrv", label: "HRV", icon: WavesIcon, color: "var(--hrv)", periods: ["week", "month"] },
   { id: "intensity", label: "Intensità", icon: ZapIcon, color: "var(--calories)", periods: ["week", "month"] },
 ];
 /** this app's sections (brand.ts): those the device does not measure are hidden, or shown as not available */
-const METRICS = ALL_METRICS.filter((m) => sectionMode(m.id) !== "hidden");
+const METRICS = ALL_METRICS.filter((m) => sectionMode(m.id) !== "hidden" && (m.id !== "bp" || BRAND.bloodPressure) && (m.id !== "temp" || BRAND.temperature));
 /** the resting heart rate of «Battito» (line, dots, tile): Gima watches do not measure it */
 const RESTING = sectionMode("resting_hr");
 type MetricId = string;
@@ -316,7 +321,9 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
                   { label: estimatedLabel("Distanza", d.distanceM, d.distanceEstimatedM), value: fmtDistance(d.distanceM), color: "var(--steps)" },
                   { label: "Sonno", value: d.sleep ? fmtMinutes(d.sleepMinutes) : "–", color: STAGE_COLOR[3] },
                   { label: "Battito medio", value: fmtInt(d.hrAvg), unit: "bpm", color: "var(--heart)" },
-                  { label: "Minuti attivi", value: fmtInt(d.activeMinutes), color: "var(--calories)" },
+                  BRAND.activeMinutes
+                    ? { label: "Minuti attivi", value: fmtInt(d.activeMinutes), color: "var(--calories)" }
+                    : { label: "Calorie attive", value: fmtInt(d.activeCalories), unit: "kcal", color: "var(--calories)" },
                 ]}
               />
             </SummaryCard>
@@ -364,7 +371,7 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
                 items={[
                   { label: "Passi", value: fmtInt(d.steps), color: "var(--steps)" },
                   { label: estimatedLabel("Distanza", d.distanceM, d.distanceEstimatedM), value: fmtDistance(d.distanceM), color: "var(--steps)" },
-                  { label: "Minuti attivi", value: fmtInt(d.activeMinutes) },
+                  ...(BRAND.activeMinutes ? [{ label: "Minuti attivi", value: fmtInt(d.activeMinutes) }] : []),
                   { label: "Calorie attive", value: fmtInt(d.activeCalories), unit: "kcal" },
                 ]}
               />
@@ -604,10 +611,70 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
       );
     }
 
+    case "bp": {
+      const bp = d.bloodPressure;
+      if (!bp.length) return <NoData>Nessuna misura della pressione in questo giorno.</NoData>;
+      const sys = stats(bp.map((x) => x.systolic));
+      const dia = stats(bp.map((x) => x.diastolic));
+      const last = bp[bp.length - 1];
+      return (
+        <MetricLayout
+          summary={
+            <SummaryCard title={dateTitle} gauge={<BigValue value={`${last.systolic}/${last.diastolic}`} unit="mmHg" label={`ultima misura, ore ${fmtTime(last.timestamp)}`} icon={<GaugeIcon />} color="var(--bp-sys)" />}>
+              <Tiles
+                items={[
+                  { label: "Media", value: `${fmtInt(sys.avg)}/${fmtInt(dia.avg)}`, unit: "mmHg", color: "var(--bp-sys)" },
+                  { label: "Misure", value: fmtInt(bp.length) },
+                  { label: "Sistolica", value: `${fmtInt(sys.min)}–${fmtInt(sys.max)}`, unit: "mmHg", color: "var(--bp-sys)" },
+                  { label: "Diastolica", value: `${fmtInt(dia.min)}–${fmtInt(dia.max)}`, unit: "mmHg", color: "var(--bp-dia)" },
+                ]}
+              />
+            </SummaryCard>
+          }
+        >
+          <ChartCard title="Pressione" description="Ogni punto è una misura dell'orologio: sistolica sopra, diastolica sotto">
+            <TimeChart
+              from={d.from}
+              to={d.to}
+              yMin={40}
+              height={260}
+              series={[
+                { points: bp.map((x) => ({ timestamp: x.timestamp, value: x.systolic })), color: "var(--bp-sys)", dots: true, gap: 3600, label: "sistolica" },
+                { points: bp.map((x) => ({ timestamp: x.timestamp, value: x.diastolic })), color: "var(--bp-dia)", dots: true, gap: 3600, label: "diastolica" },
+              ]}
+            />
+            <Legend items={[{ label: "Sistolica", color: "var(--bp-sys)" }, { label: "Diastolica", color: "var(--bp-dia)" }]} />
+          </ChartCard>
+        </MetricLayout>
+      );
+    }
+
+    case "temp": {
+      const t = d.temperature;
+      if (!t.length) return <NoData>{TEMP_NOTE}</NoData>;
+      const st = stats(t.map((x) => x.value));
+      return (
+        <MetricLayout
+          summary={
+            <SummaryCard title={dateTitle} gauge={<BigValue value={fmt1(st.avg)} unit="°C" label="media" icon={<ThermometerIcon />} color="var(--temp)" />} note={TEMP_NOTE}>
+              <Tiles items={[{ label: "Minima", value: fmt1(st.min), unit: "°C", color: "var(--temp)" }, { label: "Massima", value: fmt1(st.max), unit: "°C" }, { label: "Misure valide", value: fmtInt(t.length) }]} cols={3} />
+            </SummaryCard>
+          }
+        >
+          <ChartCard title="Temperatura corporea">
+            <TimeChart from={d.from} to={d.to} yMin={34} yMax={39} height={240} format={(v) => fmt1(v)} series={[{ points: t, color: "var(--temp)", dots: true, gap: 3600, label: "°C" }]} />
+          </ChartCard>
+        </MetricLayout>
+      );
+    }
+
     default:
       return <NoData />;
   }
 }
+
+/** most body temperatures of the Gima watches are not valid (0.15 °C): only the valid ones are shown */
+const TEMP_NOTE = "Sono mostrate solo le temperature valide, tra 30 e 43 °C: l'orologio registra spesso valori non validi, che qui non compaiono.";
 
 function StressTiles({ m }: { m: Record<StressKey, number> }) {
   return <Tiles items={STRESS_LEVELS.map((l) => ({ label: l.label, value: fmtMinutes(m[l.key]), color: l.color }))} />;
@@ -1289,7 +1356,70 @@ function buildRange(tab: MetricId, r: RangeData, user: Person, labelOf: (d: numb
       };
     }
 
+    case "bp": {
+      const sys = summaryOf(r.systolic);
+      const dia = summaryOf(r.diastolic);
+      const bars = (a: DayAgg[], color: string) => minMaxItems(a, `color-mix(in oklch, ${color} 70%, transparent)`, (i) => a[i].avg ?? undefined);
+      // the axis starts a little under the lowest value (not at 0 nor at a fixed 40): the bars stay readable
+      const floorOf = (v: number | null, step: number) => (v == null ? 0 : Math.max(0, Math.floor((v - step) / step) * step));
+      return {
+        hasData: sys.days > 0,
+        gauge: <BigValue value={sys.avg != null ? `${fmtInt(sys.avg)}/${fmtInt(dia.avg)}` : "–"} unit="mmHg" label="media" icon={<GaugeIcon />} color="var(--bp-sys)" />,
+        tiles: [
+          { label: "Sistolica", value: `${fmtInt(sys.min)}–${fmtInt(sys.max)}`, unit: "mmHg", color: "var(--bp-sys)" },
+          { label: "Diastolica", value: `${fmtInt(dia.min)}–${fmtInt(dia.max)}`, unit: "mmHg", color: "var(--bp-dia)" },
+          { label: "Giorni con misure", value: sys.days },
+        ],
+        chartTitle: "Sistolica: minima e massima per giorno (il punto è la media)",
+        items: bars(r.systolic, "var(--bp-sys)"),
+        axis: (v) => fmtInt(v),
+        yMin: floorOf(sys.min, 10),
+        extra: (
+          <ChartCard title="Diastolica: minima e massima per giorno (il punto è la media)">
+            <BarChart items={bars(r.diastolic, "var(--bp-dia)")} format={(v) => fmtInt(v)} yMin={floorOf(dia.min, 10)} height={220} sideLabels tightY minLabelGap={opts.period === "week" ? 0 : 34} />
+          </ChartCard>
+        ),
+      };
+    }
+
+    case "temp": {
+      const s = summaryOf(r.temperature);
+      return {
+        hasData: s.days > 0,
+        subtitle: TEMP_NOTE,
+        gauge: <BigValue value={fmt1(s.avg)} unit="°C" label="media" icon={<ThermometerIcon />} color="var(--temp)" />,
+        tiles: [
+          { label: "Minima", value: fmt1(s.min), unit: "°C", color: "var(--temp)" },
+          { label: "Massima", value: fmt1(s.max), unit: "°C" },
+          { label: "Giorni con misure", value: s.days },
+        ],
+        chartTitle: "Temperatura: minima e massima per giorno (il punto è la media)",
+        items: minMaxItems(r.temperature, "color-mix(in oklch, var(--temp) 70%, transparent)", (i) => r.temperature[i].avg ?? undefined),
+        axis: (v) => fmt1(v),
+        valueFormat: fmt1,
+        yMin: s.min != null ? Math.floor(s.min) - 1 : 34,
+      };
+    }
+
     case "hrv": {
+      // Gima watches: spot HRV measurements during the day, with CVRR (no nightly summary)
+      if (!r.hrv.some(Boolean) && r.hrvValues.some((x) => x.count)) {
+        const s = summaryOf(r.hrvValues);
+        const c = summaryOf(r.cvrr);
+        return {
+          hasData: s.days > 0,
+          gauge: <BigValue value={fmtInt(s.avg)} unit="ms" label="media" icon={<WavesIcon />} color="var(--hrv)" />,
+          tiles: [
+            { label: "Minima", value: fmtInt(s.min), unit: "ms", color: "var(--hrv)" },
+            { label: "Massima", value: fmtInt(s.max), unit: "ms" },
+            { label: "CVRR medio", value: fmt1(c.avg) },
+            { label: "Giorni con misure", value: s.days },
+          ],
+          chartTitle: "HRV media per giorno",
+          items: aggItems(r.hrvValues, "avg", "var(--hrv)"),
+          axis: (v) => fmtInt(v),
+        };
+      }
       const vals = r.hrv.map((h) => h?.last_night_average ?? 0);
       const withData = vals.filter((v) => v > 0);
       const last = [...r.hrv].reverse().find(Boolean);

@@ -21,6 +21,9 @@ export const NEVER_RECORDED: Record<string, string> = {
   resp: `${YOUR} non ha ancora registrato la respirazione.`,
   hrv: `${YOUR} non ha ancora registrato la variabilità del battito (HRV).`,
   intensity: `${YOUR} non ha ancora registrato minuti di intensità.`,
+  bp: `${YOUR} non ha ancora registrato la pressione.`,
+  temp: `${YOUR} non ha ancora registrato temperature valide.`,
+  ecg: `${YOUR} non ha ancora registrato elettrocardiogrammi.`,
 };
 
 export const NEVER_RECORDED_HINT =
@@ -43,4 +46,7 @@ export const AVAILABILITY_SQL: Record<string, string> = {
   resp: "SELECT 1 FROM respiratory_rate_sample LIMIT 1",
   hrv: "SELECT 1 FROM hrv_value_sample UNION ALL SELECT 1 FROM hrv_summary_sample LIMIT 1",
   intensity: "SELECT 1 FROM intensity_minutes_sample LIMIT 1",
+  bp: "SELECT 1 FROM blood_pressure_sample LIMIT 1",
+  temp: "SELECT 1 FROM body_temperature_sample LIMIT 1",
+  ecg: "SELECT 1 FROM ecg_recording LIMIT 1",
 };

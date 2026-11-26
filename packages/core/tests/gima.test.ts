@@ -40,12 +40,13 @@ async function fill(db: SqlExecutor) {
   await db.run("INSERT INTO device (id, participant_id, name, identifier) VALUES (1, 1, 'watch', 'x')");
   const ins = (table: string, cols: string[], rows: unknown[][]) =>
     db.batch(rows.map((r) => ({ sql: `INSERT INTO ${table} (${cols.join(", ")}, DEVICE_ID, USER_ID) VALUES (${cols.map(() => "?").join(", ")}, 1, 1)`, params: r as never[] })));
-  // steps: three blocks on the 11th, one at 23:30 on the 10th (belongs to the 10th)
+  // steps: three blocks on the 11th, one at 23:30 on the 10th (belongs to the 10th); the distance
+  // in meters, like the real data (DISTANCE_CM holds meters)
   await ins("GIMA_ACTIVITY_SAMPLE", ["TIMESTAMP", "TIMESTAMP_END", "STEPS", "DISTANCE_CM", "ACTIVE_CALORIES"], [
-    [at(-0.5), at(0), 500, 40000, 20],
-    [at(9), at(9.5), 1200, 96000, 48],
-    [at(9.5), at(10), 300, 24000, 12],
-    [at(18), at(18.5), 2000, 160000, 80],
+    [at(-0.5), at(0), 500, 400, 20],
+    [at(9), at(9.5), 1200, 960, 48],
+    [at(9.5), at(10), 300, 240, 12],
+    [at(18), at(18.5), 2000, 1600, 80],
   ]);
   // heart rate: every 20 minutes from 08:00 to 21:40 (14 hours), one 0 (not measured) at 22:10
   const hr = [];
@@ -95,7 +96,11 @@ describe("Gima adapter", () => {
     const r = await loadRange(db, 1, addDays(day, -1), addDays(day, 1));
     expect(r.totals.map((t) => t.steps)).toEqual([500, 3500]);
     expect(r.totals[1].calories).toBe(140);
-    expect(r.totals[1].distance_m).toBe(2800);
+    expect(r.totals[1].distance_m).toBe(2800); // meters, not centimeters
+    // a block spread over its six 5-minute slots, the sum unchanged
+    const d = await loadDay(db, 1, day);
+    expect(d.samples.filter((x) => x.steps != null && x.timestamp >= at(9) / 1000 && x.timestamp < at(9.5) / 1000).map((x) => x.steps)).toEqual([200, 200, 200, 200, 200, 200]);
+    expect(d.steps).toBe(3500);
     expect(r.totals[1].distance_estimated_m).toBe(0); // always measured on Gima
     expect(r.hrHours[1]).toBe(14);
     expect(r.valid[1]).toBe(true);

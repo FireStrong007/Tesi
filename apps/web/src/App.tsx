@@ -14,6 +14,7 @@ import { ForcedPasswordChangePage } from "@/pages/change-password";
 import { ChartsPage } from "@/pages/charts";
 import { DashboardPage } from "@/pages/dashboard";
 import { DevicesPage } from "@/pages/devices";
+import { EcgPage } from "@/pages/ecg";
 import { LoginPage } from "@/pages/login";
 import { SettingsPage } from "@/pages/settings";
 
@@ -21,6 +22,7 @@ function Routes() {
   const path = usePath();
   if (match("/devices", path)) return <DevicesPage />;
   if (match("/charts", path)) return <ChartsPage />;
+  if (BRAND.ecg && match("/ecg", path)) return <EcgPage />;
   if (match("/settings", path)) return <SettingsPage />;
   return <DashboardPage />;
 }

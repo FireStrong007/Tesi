@@ -132,7 +132,8 @@ export function fillGimaDb(db: DatabaseSync, participants: GimaParticipantSpec[]
         const h = b / 2;
         if (h < 7 || h >= 23 || r() < 0.35) continue;
         const steps = Math.round(r() < 0.15 ? between(800, 2200) : between(20, 600));
-        rows.GIMA_ACTIVITY_SAMPLE.push({ TIMESTAMP: t, TIMESTAMP_END: t + 30 * MIN, ...ids, STEPS: steps, DISTANCE_CM: Math.round(steps * 0.8), ACTIVE_CALORIES: Math.round(steps / 25) });
+        // DISTANCE_CM in meters, like the real data (the column's name notwithstanding)
+        rows.GIMA_ACTIVITY_SAMPLE.push({ TIMESTAMP: t, TIMESTAMP_END: t + 30 * MIN, ...ids, STEPS: steps, DISTANCE_CM: Math.round(steps * 0.76), ACTIVE_CALORIES: Math.round(steps / 25) });
       }
       // the night that ends this morning
       const sleepStart = day - Math.round(between(30, 90)) * MIN;

@@ -4,6 +4,7 @@
  * device columns that may be shown. The single place that lists them: the server's data access,
  * the copy check and the synthetic generator all read from here.
  */
+import { COMPARE_METRICS, type CompareMetric } from "./comparison/types";
 import { GIMA_SCHEMA } from "./gima/schema";
 import { SERVER_SCHEMA } from "./server/schema";
 
@@ -36,6 +37,12 @@ export interface Dataset {
    * number or MAC address) or `hardware_id`
    */
   deviceColumns: string[];
+  /**
+   * what the comparison with the other participants covers: only what the device measures (a Gima
+   * watch has no stress, Body Battery, intensity minutes or resting heart rate); never blood
+   * pressure or temperature
+   */
+  compareMetrics: readonly CompareMetric[];
 }
 
 /** Table names created by a schema, in order. */
@@ -68,6 +75,7 @@ export const DATASETS: Record<AppId, Dataset> = {
       ms("GARMIN_SPO2_SAMPLE"),
     ],
     deviceColumns: ["id", "name", "manufacturer", "type_name", "model", "last_measurement_at", "last_successful_upload_at"],
+    compareMetrics: COMPARE_METRICS,
   },
   heartbridge: {
     app: "heartbridge",
@@ -87,5 +95,6 @@ export const DATASETS: Record<AppId, Dataset> = {
       ms("ECG_MEASUREMENTS", "start_measure_ms"),
     ],
     deviceColumns: ["id", "name", "firmware_version", "last_measurement_at", "last_successful_upload_at"],
+    compareMetrics: ["steps", "calories", "sleep", "spo2", "respiration", "hrv"],
   },
 };

@@ -342,7 +342,8 @@ export function createApp(deps: AppDeps) {
     const metric = c.req.query("metric") as CompareMetric;
     const from = Number(c.req.query("from"));
     const to = Number(c.req.query("to"));
-    if (!COMPARE_METRICS.includes(metric)) throw new HttpError(400, "Metrica non valida.");
+    // only what this app's device measures (datasets.ts compareMetrics)
+    if (!COMPARE_METRICS.includes(metric) || !ds.compareMetrics.includes(metric)) throw new HttpError(400, "Metrica non valida.");
     if (!Number.isInteger(from) || !Number.isInteger(to) || to <= from || to - from > MAX_COMPARE_DAYS * 86_400) throw new HttpError(400, "Periodo non valido.");
     return { metric, from, to };
   };

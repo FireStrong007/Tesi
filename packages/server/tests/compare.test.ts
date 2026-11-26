@@ -195,6 +195,27 @@ describe("which days can be compared", () => {
   });
 });
 
+describe("HeartBridge (Gima)", () => {
+  it("compares steps, calories, sleep, SpO2, respiration and HRV of the other participants; never blood pressure nor temperature", async () => {
+    const file = syntheticDb("heartbridge", dir, 3, 6);
+    const s = await testServer({ app: "heartbridge", dir, dataFile: file });
+    const { participants } = await participantClients(s, ["SYN-H01"]);
+    const c = participants.get("SYN-H01")!.client;
+    const f = addDays(today, -10);
+    for (const metric of ["steps", "calories", "sleep", "spo2", "respiration", "hrv"] as const) {
+      const res = await c.get<{ days: DailyDistribution[] }>(`/api/compare/daily?metric=${metric}&from=${f}&to=${today}`);
+      expect(res.status, metric).toBe(200);
+      expect(res.body.days.some((d) => d.median != null), metric).toBe(true);
+    }
+    // what the Gima watches do not measure is not compared at all
+    for (const metric of ["stress", "body_battery", "intensity", "resting_hr"] as const)
+      expect((await c.get(`/api/compare/daily?metric=${metric}&from=${f}&to=${today}`)).status, metric).toBe(400);
+    // blood pressure and temperature are not comparison metrics
+    expect((await c.get(`/api/compare/daily?metric=blood_pressure&from=${f}&to=${today}`)).status).toBe(400);
+    expect((await c.get(`/api/compare/daily?metric=temperature&from=${f}&to=${today}`)).status).toBe(400);
+  });
+});
+
 describe("the comparison cache", () => {
   it("answers from the previous cache while the new one is built, then swaps it", async () => {
     const file = syntheticDb("vitabridge", dir, 3, COHORT);
