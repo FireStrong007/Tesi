@@ -63,7 +63,7 @@ FROM (
 )` };
 
 /** A millisecond table shown as a seconds one: `cols` maps our column to the server expression. */
-const msView = (name: string, table: string, cols: Record<string, string>, where = ""): LocalView => ({
+export const msView = (name: string, table: string, cols: Record<string, string>, where = ""): LocalView => ({
   name,
   select: (from) => {
     const conds = [where, from == null ? "" : `TIMESTAMP >= ${from * 1000}`].filter(Boolean);
@@ -74,7 +74,32 @@ FROM ${table}${conds.length ? ` WHERE ${conds.join(" AND ")}` : ""}`;
 });
 
 /** A view with the app's columns and no rows (data the server format does not have). */
-const emptyView = (name: string, cols: string[]): LocalView => ({ name, select: () => `SELECT ${cols.map((c) => `NULL AS ${c}`).join(", ")} WHERE 0` });
+export const emptyView = (name: string, cols: string[]): LocalView => ({ name, select: () => `SELECT ${cols.map((c) => `NULL AS ${c}`).join(", ")} WHERE 0` });
+
+const ids = ["device_id", "user_id", "timestamp"];
+/**
+ * The app's tables only one of the two apps has data for, with the same columns in both (the
+ * queries run unchanged; a Garmin copy simply has no rows in them, a Gima copy none in Garmin's).
+ */
+export const APP_COLUMNS = {
+  stress_sample: [...ids, "stress"],
+  body_energy_sample: [...ids, "energy"],
+  resting_hr_sample: [...ids, "heart_rate"],
+  intensity_minutes_sample: [...ids, "moderate", "vigorous"],
+  resting_metabolic_rate_sample: [...ids, "rate"],
+  nap_sample: [...ids, "end_timestamp"],
+  hrv_summary_sample: [...ids, "weekly_average", "last_night_average", "last_night_5min_high", "baseline_low_upper", "baseline_balanced_lower", "baseline_balanced_upper", "status"],
+  sleep_stats_sample: [
+    ...ids, "sleep_score", "awake_time_score", "awakenings_count", "awakenings_count_score", "deep_sleep_score", "light_sleep_score", "rem_sleep_score", "sleep_duration_score",
+    "sleep_quality_score", "sleep_recovery_score", "sleep_restlessness_score", "interruptions_score", "average_stress_during_sleep",
+  ],
+  // HeartBridge (Gima): blood pressure, body temperature, ECG recordings (the samples stay in ECG_MEASUREMENTS)
+  blood_pressure_sample: [...ids, "systolic", "diastolic"],
+  body_temperature_sample: [...ids, "temperature"],
+  ecg_recording: [...ids, "start_ms", "duration_s", "sample_count", "heart", "sbp", "dbp", "hrv", "is_afib", "diagnose_type", "ai_heart"],
+  live_sample: [...ids, "heart_rate", "steps", "body_battery", "respiration", "spo2"],
+  sleep_restless_sample: [...ids, "count"],
+} as const;
 
 /** One of the app's tables, as a SELECT over the server's tables. */
 export interface LocalView {
@@ -119,7 +144,8 @@ export const LOCAL_VIEWS: LocalView[] = [
     baseline_balanced_upper: "BASELINE_BALANCED_UPPER",
     status: "STATUS_NUM",
   }),
-  msView("hrv_value_sample", "GARMIN_HRV_VALUE_SAMPLE", { value: "VALUE" }),
+  // CVRR: Gima only
+  msView("hrv_value_sample", "GARMIN_HRV_VALUE_SAMPLE", { value: "VALUE", cvrr: "NULL" }),
   msView("intensity_minutes_sample", "GARMIN_INTENSITY_MINUTES_SAMPLE", { moderate: "COALESCE(MODERATE, 0)", vigorous: "COALESCE(VIGOROUS, 0)" }),
   msView("resting_metabolic_rate_sample", "GARMIN_RESTING_METABOLIC_RATE_SAMPLE", { rate: "RESTING_METABOLIC_RATE" }),
   // nights from the band's sleep events (74: type 0 start, type 1 end), like the app's importer;
@@ -150,8 +176,12 @@ export const LOCAL_VIEWS: LocalView[] = [
       FROM activity_sample GROUP BY user_id`,
   },
   // not in the server format: the app's live minutes and restless moments
-  emptyView("live_sample", ["device_id", "user_id", "timestamp", "heart_rate", "steps", "body_battery", "respiration", "spo2"]),
-  emptyView("sleep_restless_sample", ["device_id", "user_id", "timestamp", "count"]),
+  emptyView("live_sample", [...APP_COLUMNS.live_sample]),
+  emptyView("sleep_restless_sample", [...APP_COLUMNS.sleep_restless_sample]),
+  // HeartBridge's own data: not measured by the Garmin bands
+  emptyView("blood_pressure_sample", [...APP_COLUMNS.blood_pressure_sample]),
+  emptyView("body_temperature_sample", [...APP_COLUMNS.body_temperature_sample]),
+  emptyView("ecg_recording", [...APP_COLUMNS.ecg_recording]),
 ];
 
 /**
@@ -167,10 +197,13 @@ async function createTzOffsets(db: SqlExecutor, timeZone: string) {
   await db.batch(zoneTransitions(timeZone).map(([t, o]) => ({ sql: "INSERT INTO temp.tz_offset VALUES (?, ?)", params: [t, o] })));
 }
 
-export async function createLocalViews(db: SqlExecutor, opts: { materialize?: boolean; timeZone?: string } = {}) {
+export const createLocalViews = (db: SqlExecutor, opts: { materialize?: boolean; timeZone?: string } = {}) => createViews(db, LOCAL_VIEWS, opts);
+
+/** createLocalViews for any list of views (Garmin's LOCAL_VIEWS, Gima's GIMA_VIEWS) */
+export async function createViews(db: SqlExecutor, views: LocalView[], opts: { materialize?: boolean; timeZone?: string } = {}) {
   await createTzOffsets(db, opts.timeZone ?? STUDY_TIME_ZONE);
   const existing = await db.all<{ name: string; type: string }>("SELECT name, type FROM sqlite_temp_master WHERE type IN ('view', 'table') AND name <> 'tz_offset'");
-  for (const v of LOCAL_VIEWS) {
+  for (const v of views) {
     const old = existing.find((e) => e.name === v.name);
     if (old) await db.run(`DROP ${old.type === "view" ? "VIEW" : "TABLE"} temp.${v.name}`);
     if (!opts.materialize) await db.run(`CREATE TEMP VIEW ${v.name} AS ${v.select(null)}`);
@@ -189,11 +222,14 @@ export async function createLocalViews(db: SqlExecutor, opts: { materialize?: bo
  * as a full rebuild. Without `from`, or when a table is missing, everything is rebuilt.
  * Never on a research server database (it only ever gets TEMP views or tables).
  */
-export async function updateLocalTables(db: SqlExecutor, opts: { from: number | null; timeZone?: string }): Promise<"full" | "partial"> {
+export const updateLocalTables = (db: SqlExecutor, opts: { from: number | null; timeZone?: string }) => updateTables(db, LOCAL_VIEWS, opts);
+
+/** updateLocalTables for any list of views */
+export async function updateTables(db: SqlExecutor, views: LocalView[], opts: { from: number | null; timeZone?: string }): Promise<"full" | "partial"> {
   await createTzOffsets(db, opts.timeZone ?? STUDY_TIME_ZONE);
   const existing = new Set((await db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'")).map((r) => r.name));
-  const full = opts.from == null || LOCAL_VIEWS.some((v) => !existing.has(v.name));
-  for (const v of LOCAL_VIEWS) {
+  const full = opts.from == null || views.some((v) => !existing.has(v.name));
+  for (const v of views) {
     if (full)
       await db.batch([
         { sql: `DROP TABLE IF EXISTS main.${v.name}` },

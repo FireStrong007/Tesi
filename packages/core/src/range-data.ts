@@ -68,6 +68,13 @@ export interface RangeData {
   spo2: DayAgg[];
   resp: DayAgg[];
   hrv: (HrvSummary | null)[];
+  /** the day's HRV values (Garmin: the night's 5-minute values; Gima: spot measurements) and CVRR */
+  hrvValues: DayAgg[];
+  cvrr: DayAgg[];
+  /** blood pressure (systolic, diastolic) and body temperature per day: HeartBridge only */
+  systolic: DayAgg[];
+  diastolic: DayAgg[];
+  temperature: DayAgg[];
   intensity: { day: number; moderate: number; vigorous: number }[];
   /** minutes per stress level, per day */
   stressByLevel: Record<StressKey, number>[];
@@ -116,6 +123,13 @@ export async function loadRange(db: SqlExecutor, userId: number, from: number, t
     liveStats(db, "body_battery", userId, from, to),
     liveStats(db, "respiration", userId, from, to),
   ]);
+  const [hrvValues, cvrr, systolic, diastolic, temperature] = await Promise.all([
+    dailyStats(db, "hrv_value_sample", "value", userId, from, to),
+    dailyStats(db, "hrv_value_sample", "cvrr", userId, from, to, "AND cvrr IS NOT NULL"),
+    dailyStats(db, "blood_pressure_sample", "systolic", userId, from, to),
+    dailyStats(db, "blood_pressure_sample", "diastolic", userId, from, to),
+    dailyStats(db, "body_temperature_sample", "temperature", userId, from, to),
+  ]);
   const [stressRows, rmrRows, hrHours] = await Promise.all([
     stressSamples(db, userId, from, to),
     db.all<{ timestamp: number; rate: number }>("SELECT timestamp, rate FROM resting_metabolic_rate_sample WHERE user_id = ? AND timestamp < ? ORDER BY timestamp", [userId, to]),
@@ -140,5 +154,8 @@ export async function loadRange(db: SqlExecutor, userId: number, from: number, t
     const rows = im.filter((r) => startOfDay(r.timestamp) === d);
     return { day: d, moderate: rows.reduce((s, r) => s + r.moderate, 0), vigorous: rows.reduce((s, r) => s + r.vigorous, 0) };
   });
-  return { days, totals, sleep: sleepByDay, hr, resting, stress, energy, spo2, resp, hrv: hrvByDay, intensity, stressByLevel, rmr, hrHours, valid: hrHours.map(isValidDay) };
+  return {
+    days, totals, sleep: sleepByDay, hr, resting, stress, energy, spo2, resp, hrv: hrvByDay, hrvValues, cvrr, systolic, diastolic, temperature,
+    intensity, stressByLevel, rmr, hrHours, valid: hrHours.map(isValidDay),
+  };
 }

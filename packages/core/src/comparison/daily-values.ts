@@ -25,6 +25,7 @@ export interface DayFacts {
   bodyBatteryMax: number | null;
   spo2Avg: number | null;
   respirationAvg: number | null;
+  /** the night's HRV average (Garmin's summary) or, without one, the average of the day's HRV values (Gima) */
   hrvNightAvg: number | null;
 }
 
@@ -79,7 +80,7 @@ export function factsFromRange(r: RangeData, i: number): DayFacts {
     bodyBatteryMax: has(r.energy[i]) ? r.energy[i].max : null,
     spo2Avg: has(r.spo2[i]) ? r.spo2[i].avg : null,
     respirationAvg: has(r.resp[i]) ? r.resp[i].avg : null,
-    hrvNightAvg: r.hrv[i]?.last_night_average ?? null,
+    hrvNightAvg: r.hrv[i]?.last_night_average ?? (has(r.hrvValues[i]) ? r.hrvValues[i].avg : null),
   };
 }
 

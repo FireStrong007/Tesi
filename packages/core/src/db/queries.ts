@@ -120,6 +120,16 @@ export const spo2Samples = series("spo2_sample", "spo2");
 export const respiratorySamples = series("respiratory_rate_sample", "rate");
 export const restingHrSamples = series("resting_hr_sample", "heart_rate");
 export const hrvValueSamples = series("hrv_value_sample", "value");
+/** HeartBridge (Gima): CVRR next to each HRV value, blood pressure, body temperature (valid values only, gima/views.ts) */
+export const cvrrSamples = series("hrv_value_sample", "cvrr");
+export const temperatureSamples = series("body_temperature_sample", "temperature");
+export interface BloodPressure {
+  timestamp: number;
+  systolic: number;
+  diastolic: number;
+}
+export const bloodPressureSamples = (db: SqlExecutor, userId: number, from: number, to: number) =>
+  db.all<BloodPressure>("SELECT timestamp, systolic, diastolic FROM blood_pressure_sample WHERE user_id = ? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp", [userId, from, to]);
 export const heartRateSamples = (db: SqlExecutor, userId: number, from: number, to: number) =>
   db.all<TimeValue>("SELECT timestamp, heart_rate AS value FROM activity_sample WHERE user_id = ? AND timestamp >= ? AND timestamp < ? AND heart_rate > 0 ORDER BY timestamp", [userId, from, to]);
 
@@ -152,7 +162,7 @@ export async function intensityMinutes(db: SqlExecutor, userId: number, from: nu
 export interface SleepSegment {
   start: number;
   end: number;
-  stage: number; // 1 awake, 2 light, 3 deep, 4 rem
+  stage: number; // 1 awake, 2 light, 3 deep, 4 rem (other codes, e.g. Gima's unknown ones: no segment)
 }
 
 export interface SleepSession {
@@ -184,6 +194,8 @@ export async function sleepSessions(db: SqlExecutor, userId: number, from: numbe
   const addSegment = (s: SleepSession, start: number, end: number, rawStage: number) => {
     if (end <= start) return;
     const stage = rawStage === 0 ? 1 : rawStage;
+    // an unknown stage (gima/views.ts UNKNOWN_STAGE) is no sleep stage: neither a segment nor minutes
+    if (stage < 1 || stage > 4) return;
     const last = s.segments[s.segments.length - 1];
     if (last && last.stage === stage && last.end === start) last.end = end;
     else s.segments.push({ start, end, stage });
@@ -235,3 +247,29 @@ export async function sleepSessions(db: SqlExecutor, userId: number, from: numbe
 
 export const sleepTotal = (s: SleepSession) => asleepMinutes(s.minutes);
 
+// ------------------------------------------------------------------ ECG (HeartBridge)
+
+export interface EcgRecording {
+  timestamp: number;
+  /** ECG_MEASUREMENTS.start_measure_ms: the key of the samples */
+  start_ms: number;
+  duration_s: number | null;
+  sample_count: number;
+  heart: number | null;
+  sbp: number | null;
+  dbp: number | null;
+  hrv: number | null;
+  is_afib: number | null;
+  diagnose_type: number | null;
+  ai_heart: number | null;
+}
+
+/** the recordings in [from, to), newest first (gima/views.ts: invalid values already NULL) */
+export const ecgRecordings = (db: SqlExecutor, userId: number, from: number, to: number) =>
+  db.all<EcgRecording>("SELECT * FROM ecg_recording WHERE user_id = ? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp DESC", [userId, from, to]);
+
+/** the samples of one recording, from the copy of the server's table (gima/ecg.ts decodes them) */
+export async function ecgBlob(db: SqlExecutor, userId: number, startMs: number): Promise<Uint8Array | null> {
+  const [r] = await db.all<{ ecg_data: Uint8Array }>("SELECT ecg_data FROM ECG_MEASUREMENTS WHERE USER_ID = ? AND start_measure_ms = ? LIMIT 1", [userId, startMs]);
+  return r?.ecg_data ?? null;
+}

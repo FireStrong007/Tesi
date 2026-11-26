@@ -4,9 +4,12 @@
  * with the real data's shape: times in milliseconds, activity in 30-minute blocks (steps of the
  * block, only blocks with steps), sleep stages as start + DURATION_SEC (241 deep, 242 light), and
  * the invalid values found in the real data (temperature 0.15 °C, 0 = not measured, ai_heart
- * above 300, ECG without duration). Some sections are left empty on purpose.
+ * above 300, ECG without duration). Some sections are left empty on purpose. Some nights are split
+ * in two segments with a pause awake, like a real one. ECG samples are at 250 / 3 Hz (core's
+ * gima/ecg.ts), clipped to ±500; duration_ms is the start-to-send time, a few seconds longer.
  */
 import type { DatabaseSync } from "node:sqlite";
+import { ECG_SAMPLE_RATE_HZ } from "@bridge/core/gima/ecg";
 import { GIMA_SCHEMA } from "@bridge/core/gima/schema";
 import { rng } from "./demo/generator";
 import { fakeHash, insertRows, writeDatabaseFile, type SqlRow } from "./sqlite-file";
@@ -45,6 +48,11 @@ export function defaultGimaParticipants(days = 21): GimaParticipantSpec[] {
   ];
 }
 
+/** `n` more participants with every section, data until now: enough people for the comparison */
+export function gimaCohortParticipants(n: number, days = 21): GimaParticipantSpec[] {
+  return Array.from({ length: n }, (_, i) => ({ code: `SYN-K${String(i + 1).padStart(3, "0")}`, seed: 5000 + i, days, ecgs: i % 3 }));
+}
+
 const MIN = 60_000;
 const DAY = 86_400_000;
 
@@ -57,7 +65,7 @@ export function ecgBlob(samples: Int32Array): Uint8Array {
 }
 
 /** A made-up ECG trace (P, QRS, T waves plus noise), clipped to ±500 like the real samples. */
-export function syntheticEcg(count: number, bpm: number, r: () => number, rateHz = 250): Int32Array {
+export function syntheticEcg(count: number, bpm: number, r: () => number, rateHz = ECG_SAMPLE_RATE_HZ): Int32Array {
   const out = new Int32Array(count);
   const beat = (60 / bpm) * rateHz;
   const g = (x: number, mu: number, sigma: number, a: number) => a * Math.exp(-((x - mu) ** 2) / (2 * sigma ** 2));
@@ -130,9 +138,28 @@ export function fillGimaDb(db: DatabaseSync, participants: GimaParticipantSpec[]
       const sleepStart = day - Math.round(between(30, 90)) * MIN;
       const sleepEnd = day + Math.round(between(6 * 60, 7.5 * 60)) * MIN;
       if (sleepEnd <= until && r() < 0.75) {
+        // one night in five is split in two segments, with 10–40 minutes awake in between
+        const pauseAt = r() < 0.2 ? sleepEnd - Math.round(between(50, 90)) * MIN : null;
+        const pause = Math.round(between(10, 40)) * MIN;
         let t = sleepStart;
+        let segStart = sleepStart;
         let deep = 0, light = 0, deepCount = 0, lightCount = 0;
+        const closeSegment = (end: number) => {
+          rows.GIMA_SLEEP_STATS_SAMPLE.push({
+            TIMESTAMP: segStart, TIMESTAMP_END: end, ...ids, RAPID_EYE_MOVEMENT_TOT: 0,
+            DEEP_SLEEP_COUNT: deepCount, LIGHT_SLEEP_COUNT: lightCount, DEEP_SLEEP_TOT_MIN: Math.round(deep), LIGHT_SLEEP_TOT_MIN: Math.round(light),
+          });
+          deep = light = deepCount = lightCount = 0;
+        };
+        let paused = false;
         for (let k = 0; t < sleepEnd; k++) {
+          if (pauseAt != null && !paused && t >= pauseAt) {
+            closeSegment(t);
+            paused = true;
+            t += pause;
+            segStart = t;
+            if (t >= sleepEnd) break;
+          }
           const isDeep = k % 2 === 1;
           const dur = Math.min(Math.round(isDeep ? between(20, 50) : between(40, 90)) * 60, Math.round((sleepEnd - t) / 1000));
           rows.GIMA_SLEEP_STAGE_SAMPLE.push({ TIMESTAMP: t, ...ids, DURATION_SEC: dur, STAGE: isDeep ? 241 : 242 });
@@ -140,10 +167,7 @@ export function fillGimaDb(db: DatabaseSync, participants: GimaParticipantSpec[]
           else (light += dur / 60), lightCount++;
           t += dur * 1000;
         }
-        rows.GIMA_SLEEP_STATS_SAMPLE.push({
-          TIMESTAMP: sleepStart, TIMESTAMP_END: sleepEnd, ...ids, RAPID_EYE_MOVEMENT_TOT: 0,
-          DEEP_SLEEP_COUNT: deepCount, LIGHT_SLEEP_COUNT: lightCount, DEEP_SLEEP_TOT_MIN: Math.round(deep), LIGHT_SLEEP_TOT_MIN: Math.round(light),
-        });
+        if (deepCount + lightCount) closeSegment(t);
       }
     }
     // ECG recordings: about half without duration and values (like the real ones), device assessments as found
@@ -155,7 +179,7 @@ export function fillGimaDb(db: DatabaseSync, participants: GimaParticipantSpec[]
       const bpm = Math.round(between(66, 88));
       rows.ECG_MEASUREMENTS.push({
         timestamp_string: localString(start), start_measure_ms: start,
-        duration_ms: measured ? Math.round((count / 74) * 1000) : 0, sample_count: count,
+        duration_ms: measured ? Math.round((count / ECG_SAMPLE_RATE_HZ) * 1000 + between(5000, 12000)) : 0, sample_count: count,
         heart: measured ? bpm : 0, dbp: measured ? Math.round(dia) : 0, sbp: measured ? Math.round(sys) : 0, hrv: measured ? Math.round(between(28, 60)) : 0,
         is_afib: p.seed === 201 && k === 3 ? 1 : 0, diagnose_type: diagnoses[k % diagnoses.length],
         ai_heart: k % 4 === 3 ? 400 : Math.round(between(70, 160)), ...ids, ecg_data: ecgBlob(syntheticEcg(count, bpm, r)),

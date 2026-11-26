@@ -6,7 +6,11 @@
  */
 import type { AppId } from "./datasets";
 import type { SqlExecutor } from "./db/sql";
-import { createLocalViews, updateLocalTables } from "./server/views";
+import { GIMA_VIEWS } from "./gima/views";
+import { LOCAL_VIEWS, createViews, updateTables } from "./server/views";
+
+/** each app's views: Gadgetbridge's Garmin tables, or the Gima tables */
+export const VIEWS_OF: Record<AppId, typeof LOCAL_VIEWS> = { vitabridge: LOCAL_VIEWS, heartbridge: GIMA_VIEWS };
 
 export interface AdapterOptions {
   /** TEMP tables with an index (a snapshot, fast to query) instead of TEMP views */
@@ -14,12 +18,7 @@ export interface AdapterOptions {
 }
 
 export async function createAppTables(db: SqlExecutor, app: AppId, opts: AdapterOptions = {}) {
-  switch (app) {
-    case "vitabridge":
-      return createLocalViews(db, opts);
-    case "heartbridge":
-      throw new Error("L'adattatore dei dati Gima arriva con la Fase 5");
-  }
+  return createViews(db, VIEWS_OF[app], opts);
 }
 
 /**
@@ -27,10 +26,5 @@ export async function createAppTables(db: SqlExecutor, app: AppId, opts: Adapter
  * start of the study's zone) on, or entirely with null.
  */
 export async function updateAppTables(db: SqlExecutor, app: AppId, opts: { from: number | null }) {
-  switch (app) {
-    case "vitabridge":
-      return updateLocalTables(db, opts);
-    case "heartbridge":
-      throw new Error("L'adattatore dei dati Gima arriva con la Fase 5");
-  }
+  return updateTables(db, VIEWS_OF[app], opts);
 }

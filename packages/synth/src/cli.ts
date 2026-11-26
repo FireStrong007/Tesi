@@ -8,7 +8,7 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { cohortParticipants, defaultGarminParticipants, writeGarminDb } from "./garmin-db";
-import { defaultGimaParticipants, writeGimaDb } from "./gima-db";
+import { defaultGimaParticipants, gimaCohortParticipants, writeGimaDb } from "./gima-db";
 
 const { values } = parseArgs({ options: { out: { type: "string", default: "data" }, days: { type: "string", default: "28" }, now: { type: "string" }, cohort: { type: "string", default: "0" } } });
 const base = process.env.INIT_CWD ?? process.cwd();
@@ -21,9 +21,11 @@ mkdirSync(out, { recursive: true });
 const t0 = Date.now();
 const garmin = [...defaultGarminParticipants(days), ...cohortParticipants(cohort, days)];
 writeGarminDb(resolve(out, "synthetic-garmin.db"), { now, participants: garmin });
-writeGimaDb(resolve(out, "synthetic-gima.db"), { now, participants: defaultGimaParticipants(Math.min(days, 21)) });
+const gima = [...defaultGimaParticipants(Math.min(days, 21)), ...gimaCohortParticipants(cohort, Math.min(days, 21))];
+writeGimaDb(resolve(out, "synthetic-gima.db"), { now, participants: gima });
 console.log(`Database sintetici scritti in ${out} (synthetic-garmin.db, synthetic-gima.db) in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 const until = now.toLocaleString("it-IT", { timeZone: "Europe/Rome", dateStyle: "short", timeStyle: "short" });
 console.log(`synthetic-garmin.db: ${garmin.length} partecipanti (${garmin.length - cohort} predefiniti${cohort ? ` + ${cohort} della coorte` : ""}), dati fino al ${until} (Europe/Rome)`);
+console.log(`synthetic-gima.db: ${gima.length} partecipanti (${gima.length - cohort} predefiniti${cohort ? ` + ${cohort} della coorte` : ""})`);
 // with the default participants alone most days have fewer than 5 others: the comparison needs a cohort
 if (cohort < 10) console.log("Per provare «Confronta» servono più partecipanti: npm run gen:synthetic -- --cohort 100");
