@@ -14,7 +14,7 @@ import { estimatedLabel, fmtDateTime, fmtDayTitle, fmtDistance, fmtInt, fmtMinut
 import { restingCalories, stressLevelOf } from "@bridge/core/metrics";
 import { startOfDay } from "@bridge/core/time-zone";
 import { NEVER_SHORT } from "@/lib/empty-states";
-import { EcgHomeCard } from "@/pages/ecg";
+import { EcgHomeCard } from "@/components/ecg-parts";
 import { navigate } from "@/lib/router";
 import { cn } from "@/lib/utils";
 

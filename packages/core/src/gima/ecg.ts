@@ -24,12 +24,15 @@ export const ECG_UNIT = "unità del dispositivo";
 /** the Gima app clips the samples here: a higher peak shows as a flat top */
 export const ECG_CLIP = 500;
 
-/** the device's assessment, with prudent words (piano-multiutente.md): never the app's own */
+/**
+ * The device's assessment, with prudent words: never the app's own. The labels are short; every
+ * box that shows them says once that they are the device's (NOT_A_DIAGNOSIS).
+ */
 export function ecgAssessment(isAfib: number | null, diagnoseType: number | null): string {
-  if (isAfib === 1) return "Possibile fibrillazione atriale (secondo il dispositivo)";
+  if (isAfib === 1) return "Possibile fibrillazione atriale";
   switch (diagnoseType) {
     case 1:
-      return "Ritmo normale (secondo il dispositivo)";
+      return ECG_NORMAL;
     case 5:
       return "Possibili battiti prematuri ventricolari";
     case 9:
@@ -38,7 +41,11 @@ export function ecgAssessment(isAfib: number | null, diagnoseType: number | null
       return "Non classificato";
   }
 }
-export const NOT_A_DIAGNOSIS = "Valutazione automatica del dispositivo, non è una diagnosi medica";
+export const ECG_NORMAL = "Ritmo normale";
+/** once per box that shows assessments (summary, values, list) */
+export const NOT_A_DIAGNOSIS = "Valutazioni automatiche del dispositivo, non sono diagnosi mediche";
+/** the assessments in the order the summaries list them */
+export const ECG_ASSESSMENTS = [ECG_NORMAL, "Possibile fibrillazione atriale", "Possibili battiti prematuri ventricolari", "Possibili battiti prematuri atriali", "Non classificato"] as const;
 
 /** ecg_data: signed 32-bit little-endian integers */
 export function decodeEcg(blob: Uint8Array): Int32Array {

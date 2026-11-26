@@ -9,6 +9,7 @@ import {
   BarChart3Icon,
   BatteryChargingIcon,
   BrainIcon,
+  ChevronRightIcon,
   DropletIcon,
   FlameIcon,
   FootprintsIcon,
@@ -17,6 +18,7 @@ import {
   ThermometerIcon,
   UsersIcon,
   MoonIcon,
+  SquareActivityIcon,
   WavesIcon,
   WindIcon,
   ZapIcon,
@@ -63,7 +65,9 @@ import {
 } from "@/lib/comparison";
 import { ApiError } from "@/lib/api";
 import { loadDay, type DayData } from "@bridge/core/day-data";
-import { addDays, sleepTotal, startOfDay } from "@bridge/core/db/queries";
+import { ECG_ASSESSMENTS } from "@bridge/core/gima/ecg";
+import { AssessmentBadge, EcgDotsChart, EcgValues, EcgViewer, NOT_A_DIAGNOSIS, assessmentColor, assessmentOf } from "@/components/ecg-parts";
+import { addDays, ecgRecordings, sleepTotal, startOfDay, type EcgRecording } from "@bridge/core/db/queries";
 import { estimatedLabel, fmtDay, fmtDayLong, fmtDayMonth, fmtDayRange, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
 import { STRESS_LEVELS, STRESS_MIN_VALID, getValidDayHours, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@bridge/core/metrics";
 import { loadRange, type DayAgg, type RangeData } from "@bridge/core/range-data";
@@ -86,10 +90,14 @@ const ALL_METRICS: { id: string; label: string; icon: Icon; color: string; perio
   { id: "bp", label: "Pressione", icon: GaugeIcon, color: "var(--bp-sys)", periods: ["day", "week", "month"] },
   { id: "temp", label: "Temperatura", icon: ThermometerIcon, color: "var(--temp)", periods: ["day", "week", "month"] },
   { id: "hrv", label: "HRV", icon: WavesIcon, color: "var(--hrv)", periods: ["week", "month"] },
+  // HeartBridge: the watch's electrocardiograms (brand.ts)
+  { id: "ecg", label: "ECG", icon: SquareActivityIcon, color: "var(--primary)", periods: ["day", "week", "month"] },
   { id: "intensity", label: "Intensità", icon: ZapIcon, color: "var(--calories)", periods: ["week", "month"] },
 ];
 /** this app's sections (brand.ts): those the device does not measure are hidden, or shown as not available */
-const METRICS = ALL_METRICS.filter((m) => sectionMode(m.id) !== "hidden" && (m.id !== "bp" || BRAND.bloodPressure) && (m.id !== "temp" || BRAND.temperature));
+const METRICS = ALL_METRICS.filter(
+  (m) => sectionMode(m.id) !== "hidden" && (m.id !== "bp" || BRAND.bloodPressure) && (m.id !== "temp" || BRAND.temperature) && (m.id !== "ecg" || BRAND.ecg),
+);
 /** the resting heart rate of «Battito» (line, dots, tile): Gima watches do not measure it */
 const RESTING = sectionMode("resting_hr");
 type MetricId = string;
@@ -172,6 +180,12 @@ export function ChartsPage() {
           <EmptyState icon={<metric.icon />} title={NEVER_RECORDED[tab] ?? "Nessun dato"}>
             {NEVER_RECORDED_HINT}
           </EmptyState>
+        ) : tab === "ecg" ? (
+          period === "day" ? (
+            <EcgDay day={day} chosen={Number(q.get("t")) || null} onChoose={(r) => set({ t: r.start_ms })} />
+          ) : (
+            <EcgRange day={day} period={period} onOpen={(r) => set({ day: startOfDay(r.timestamp), period: "day", t: r.start_ms })} />
+          )
         ) : period === "day" ? (
           <DayView tab={tab} day={day} />
         ) : (
@@ -179,6 +193,129 @@ export function ChartsPage() {
         )}
       </PageBody>
     </>
+  );
+}
+
+// ------------------------------------------------------------------ ECG (HeartBridge)
+
+/**
+ * A day's ECG: the recording's values and the device's assessment on the left, the viewer on the
+ * right; with more recordings that day, one button per time.
+ */
+function EcgDay({ day, chosen, onChoose }: { day: number; chosen: number | null; onChoose: (r: EcgRecording) => void }) {
+  const { db, user } = useApp();
+  const { data: list } = useQuery(async () => (await ecgRecordings(db, user.id, day, addDaysLocal(day, 1))).reverse(), [day, user.id]);
+  if (!list) return <Loading />;
+  if (!list.length) return <NoData>Nessun elettrocardiogramma in questo giorno.</NoData>;
+  const r = list.find((x) => x.start_ms === chosen) ?? list[list.length - 1];
+  return (
+    <MetricLayout
+      summary={
+        <SummaryCard title={fmtDayLong(day)} subtitle={`Registrazione delle ${fmtTime(r.timestamp)}`} note={`${NOT_A_DIAGNOSIS}.`}>
+          {list.length > 1 && (
+            <ToggleGroup type="single" value={String(r.start_ms)} onValueChange={(v) => v && onChoose(list.find((x) => String(x.start_ms) === v)!)} className="w-full flex-wrap">
+              {list.map((x) => (
+                <ToggleGroupItem key={x.start_ms} value={String(x.start_ms)} aria-label={`Registrazione delle ${fmtTime(x.timestamp)}`}>
+                  {fmtTime(x.timestamp)}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          )}
+          <div className="space-y-3">
+            <AssessmentBadge r={r} />
+            <EcgValues r={r} cols={2} />
+          </div>
+        </SummaryCard>
+      }
+    >
+      <ChartCard title="Tracciato" description="Un dito o il mouse mostrano tempo e valore; due dita, Ctrl + rotella o i pulsanti cambiano la velocità; la striscia sotto sposta lungo la registrazione">
+        <EcgViewer r={r} />
+      </ChartCard>
+    </MetricLayout>
+  );
+}
+
+/**
+ * A week or a month of ECG: how many recordings and with which assessment, the average heart rate
+ * of those with one and the latest; one dot per recording, then the list. A dot or a row opens the
+ * recording's day.
+ */
+function EcgRange({ day, period, onOpen }: { day: number; period: Period; onOpen: (r: EcgRecording) => void }) {
+  const { db, user } = useApp();
+  const { from, to } = periodRange(period, day);
+  const { data: list } = useQuery(() => ecgRecordings(db, user.id, from, to), [from, to, user.id]);
+  if (!list) return <Loading />;
+  const title = period === "month" ? fmtMonth(from) : `${fmtDay(from)} – ${fmtDay(addDaysLocal(to, -1))}`;
+  if (!list.length) return <NoData>Nessun elettrocardiogramma in questo periodo.</NoData>;
+  const hearts = list.map((x) => x.heart).filter((h): h is number => h != null);
+  const counts = ECG_ASSESSMENTS.map((label) => ({ label, n: list.filter((x) => assessmentOf(x) === label).length })).filter((c) => c.n > 0);
+  const last = list[0];
+  return (
+    <MetricLayout
+      summary={
+        <SummaryCard
+          title={title}
+          gauge={<BigValue value={list.length} label={list.length === 1 ? "registrazione" : "registrazioni"} icon={<SquareActivityIcon />} color="var(--primary)" />}
+          note={`${NOT_A_DIAGNOSIS}.`}
+        >
+          <div className="space-y-2">
+            {counts.map((c) => (
+              <div key={c.label} className="space-y-1">
+                <div className="flex items-baseline justify-between gap-2 text-sm">
+                  <span className="min-w-0">{c.label}</span>
+                  <span className="tabular font-semibold">{c.n}</span>
+                </div>
+                <div className="bg-muted h-2 overflow-hidden rounded-full">
+                  <div className="h-full rounded-full" style={{ width: `${(c.n / list.length) * 100}%`, background: assessmentColor(c.label === ECG_ASSESSMENTS[0]) }} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <Tiles
+            items={[
+              { label: "Battito medio", value: hearts.length ? fmtInt(hearts.reduce((a, b) => a + b, 0) / hearts.length) : "–", unit: "bpm", sub: `${hearts.length} su ${list.length} con battito`, color: "var(--heart)" },
+              { label: "Ultima registrazione", value: fmtDayMonth(last.timestamp), sub: `ore ${fmtTime(last.timestamp)}` },
+            ]}
+          />
+        </SummaryCard>
+      }
+    >
+      <ChartCard title="Battito di ogni registrazione" description="Un punto per registrazione: verde ritmo normale, ambra le altre valutazioni; cerchio vuoto in basso se il battito non è stato registrato. Tocca un punto per aprirla.">
+        <EcgDotsChart recordings={list} from={from} to={to} week={period === "week"} onOpen={onOpen} />
+        <Legend
+          items={[
+            { label: "Ritmo normale", color: assessmentColor(true) },
+            { label: "Altre valutazioni", color: assessmentColor(false) },
+          ]}
+        />
+      </ChartCard>
+      <ChartCard title={`Registrazioni (${list.length})`} description={`${NOT_A_DIAGNOSIS}.`}>
+        <ul className="-mx-2 divide-y">
+          {list.map((r) => (
+            <li key={r.start_ms}>
+              <button onClick={() => onOpen(r)} className="hover:bg-accent/50 flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left">
+                {/* the assessment under the date on a phone, beside it on a wider screen */}
+                <div className="flex min-w-0 flex-1 flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                  <div className="min-w-0">
+                    <div className="font-medium">
+                      {fmtDayTitle(r.timestamp)}, {fmtTime(r.timestamp)}
+                    </div>
+                    <div className="text-muted-foreground text-xs">
+                      {r.heart != null ? `${r.heart} bpm` : "battito non registrato"}
+                      {r.sbp != null && r.dbp != null ? ` · ${r.sbp}/${r.dbp} mmHg` : ""}
+                    </div>
+                  </div>
+                  <div>
+                    <AssessmentBadge r={r} />
+                  </div>
+                </div>
+                <ChevronRightIcon className="text-muted-foreground size-4 shrink-0" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </ChartCard>
+    </MetricLayout>
   );
 }
 

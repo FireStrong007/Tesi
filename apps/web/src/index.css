@@ -49,6 +49,9 @@
   --bp-sys: oklch(0.52 0.16 262);
   --bp-dia: oklch(0.7 0.11 235);
   --temp: oklch(0.7 0.14 85);
+  /* the device's ECG assessments: a normal rhythm, any other one */
+  --ecg-normal: oklch(0.62 0.15 150);
+  --ecg-other: oklch(0.74 0.16 70);
   --chart-grid: oklch(0.92 0.01 210);
   /* heart-rate zones 1..5 (Gadgetbridge: grey, light blue, green, orange, red) */
   --zone-1: oklch(0.7 0.02 240);
@@ -201,6 +204,27 @@
 }
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom);
+}
+/*
+ * The phone's bottom menu (app-shell.tsx, under md): 4rem of buttons, its 1px border and the safe
+ * area. The content leaves this much room at its end, and an element brought into view (scrolling
+ * to it, the keyboard's Tab, a link) stops above the menu, never under it.
+ */
+:root {
+  --bottom-nav: 0px;
+}
+@media (width < 48rem) {
+  :root {
+    --bottom-nav: calc(4rem + 1px + env(safe-area-inset-bottom));
+  }
+  html {
+    scroll-padding-bottom: var(--bottom-nav);
+    /* the same at the top: the page's sticky header (57px) and, in Grafici, the metrics bar under it */
+    scroll-padding-top: 57px;
+  }
+  html:has(nav[aria-label="Metriche"]) {
+    scroll-padding-top: calc(57px + 3.25rem);
+  }
 }
 /* Edge adds its own "show password" button: the app has one (PasswordInput) */
 input::-ms-reveal,

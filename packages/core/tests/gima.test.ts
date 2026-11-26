@@ -149,8 +149,9 @@ describe("Gima adapter", () => {
     expect(Array.from(decodeEcg((await ecgBlob(db, 1, at(15)))!))).toEqual([1, -2, 500]);
     expect(await ecgBlob(db, 2, at(15))).toBeNull(); // another participant: nothing
     expect(ECG_SAMPLE_RATE_HZ).toBeCloseTo(83.333, 3);
-    expect(ecgAssessment(recs[1].is_afib, recs[1].diagnose_type)).toBe("Ritmo normale (secondo il dispositivo)");
-    expect(ecgAssessment(1, 5)).toBe("Possibile fibrillazione atriale (secondo il dispositivo)");
+    expect(ecgAssessment(recs[1].is_afib, recs[1].diagnose_type)).toBe("Ritmo normale");
+    expect(ecgAssessment(1, 5)).toBe("Possibile fibrillazione atriale");
+    expect(ecgAssessment(0, 5)).toBe("Possibili battiti prematuri ventricolari");
     expect(ecgAssessment(0, 9)).toBe("Possibili battiti prematuri atriali");
     expect(ecgAssessment(0, 42)).toBe("Non classificato");
   });

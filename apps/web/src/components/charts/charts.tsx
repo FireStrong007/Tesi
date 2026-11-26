@@ -64,7 +64,7 @@ const useClipId = () => "clip" + useId().replace(/[^a-zA-Z0-9_-]/g, "");
 // ---------------------------------------------------------------- shared pieces
 
 /** Chart container: receives the gestures and shows the zoom bar while zoomed. */
-function Surface({
+export function Surface({
   boxRef,
   ix,
   width,
@@ -130,22 +130,28 @@ export interface TipLine {
   sub?: boolean;
 }
 
-/** Tooltip placed beside the cursor, on the side with more room, so a finger never covers it. */
-function Tooltip({ x, width, plotLeft, top, title, lines }: { x: number; width: number; plotLeft: number; top: number; title: string; lines: TipLine[] }) {
+/**
+ * Tooltip placed beside the cursor, on the side with more room, so a finger never covers it.
+ * Without a title the lines start at the top (a one-line reading, e.g. the ECG trace's).
+ */
+export function Tooltip({ x, width, plotLeft, top, title, lines }: { x: number; width: number; plotLeft: number; top: number; title: string; lines: TipLine[] }) {
   const chars = Math.max(title.length, ...lines.map((l) => l.text.length + (l.color || l.sub ? 2 : 0)));
   const tw = Math.ceil(16 + chars * 6.2);
-  const th = 20 + 14 * lines.length;
+  const head = title ? 0 : 14;
+  const th = 20 + 14 * lines.length - head;
   const left = Math.max(0, Math.min(x > (plotLeft + width) / 2 ? x - tw - 10 : x + 10, width - tw));
   return (
     <g pointerEvents="none" transform={`translate(${left},${top})`}>
       <rect width={tw} height={th} rx={6} fill="var(--popover)" stroke="var(--border)" />
-      <text x={8} y={14} className="fill-muted-foreground text-[10px]">
-        {title}
-      </text>
+      {title && (
+        <text x={8} y={14} className="fill-muted-foreground text-[10px]">
+          {title}
+        </text>
+      )}
       {lines.map((l, i) => (
         <g key={i}>
-          {l.color && <circle cx={11} cy={24 + i * 14} r={3} fill={l.color} />}
-          <text x={l.color || l.sub ? 18 : 8} y={28 + i * 14} className={cn("text-[11px]", l.sub ? "fill-muted-foreground" : "fill-foreground font-semibold")}>
+          {l.color && <circle cx={11} cy={24 + i * 14 - head} r={3} fill={l.color} />}
+          <text x={l.color || l.sub ? 18 : 8} y={28 + i * 14 - head} className={cn("text-[11px]", l.sub ? "fill-muted-foreground" : "fill-foreground font-semibold")}>
             {l.text}
           </text>
         </g>
@@ -154,7 +160,7 @@ function Tooltip({ x, width, plotLeft, top, title, lines }: { x: number; width: 
   );
 }
 
-function Cursor({ x, top, bottom }: { x: number; top: number; bottom: number }) {
+export function Cursor({ x, top, bottom }: { x: number; top: number; bottom: number }) {
   return <line x1={x} x2={x} y1={top} y2={bottom} stroke="var(--muted-foreground)" strokeOpacity={0.6} pointerEvents="none" />;
 }
 
@@ -287,7 +293,7 @@ const twoLines = (label: string): [string, string] => {
 };
 
 /** the smallest of 1, 2, 3, 5, 7, 10 bars between two labels that leaves `gap` px between them */
-const labelStep = (bw: number, gap: number) => [1, 2, 3, 5, 7, 10].find((k) => k * bw >= gap) ?? 10;
+export const labelStep = (bw: number, gap: number) => [1, 2, 3, 5, 7, 10].find((k) => k * bw >= gap) ?? 10;
 
 export interface RefLine {
   value: number;

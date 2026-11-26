@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
-import { ActivityIcon, ChartColumnIcon, CloudOffIcon, HouseIcon, LogOutIcon, SettingsIcon, WatchIcon } from "lucide-react";
-import { BRAND } from "@/brand";
+import { ChartColumnIcon, CloudOffIcon, HouseIcon, LogOutIcon, SettingsIcon, WatchIcon } from "lucide-react";
 import { useApp } from "@/app-context";
 import { useAuth, useMe } from "@/auth";
 import { fmtRelative } from "@bridge/core/format";
@@ -10,8 +9,6 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { to: "/", label: "Home", icon: HouseIcon },
   { to: "/charts", label: "Grafici", icon: ChartColumnIcon },
-  // HeartBridge: the watch's electrocardiograms
-  ...(BRAND.ecg ? [{ to: "/ecg", label: "ECG", icon: ActivityIcon }] : []),
   { to: "/devices", label: "Dispositivi", icon: WatchIcon },
   { to: "/settings", label: "Impostazioni", icon: SettingsIcon },
 ];
@@ -67,7 +64,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
         </div>
       </aside>
-      <div className="min-w-0 flex-1 pb-20 md:pb-0">
+      {/* the space under the content is the bottom menu's height (index.css --bottom-nav): nothing ends under it */}
+      <div className="min-w-0 flex-1 pb-[var(--bottom-nav)]">
         {status.error && (
           <div className="bg-muted text-muted-foreground flex items-center gap-2 border-b px-4 py-2 text-sm md:px-8" role="status">
             <CloudOffIcon className="size-4 shrink-0" />
@@ -77,12 +75,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         {children}
       </div>
       <nav className="bg-card/95 pb-safe fixed inset-x-0 bottom-0 z-40 border-t backdrop-blur md:hidden" aria-label="Sezioni">
-        {/* one column per section: 4 in VitaBridge, 5 with HeartBridge's ECG */}
-        <div className={cn("grid", NAV.length === 5 ? "grid-cols-5" : "grid-cols-4")}>
+        {/* a fixed height: --bottom-nav in index.css is this plus the border and the safe area */}
+        <div className="grid h-16 grid-cols-4">
           {NAV.map((n) => {
             const active = isActive(path, n.to);
             return (
-              <button key={n.to} onClick={() => navigate(n.to)} aria-current={active ? "page" : undefined} className="flex min-w-0 flex-col items-center gap-1 py-2 text-[11px] font-medium">
+              <button key={n.to} onClick={() => navigate(n.to)} aria-current={active ? "page" : undefined} className="flex min-w-0 flex-col items-center justify-center gap-1 text-[11px] font-medium">
                 <span className={cn("flex h-7 w-12 items-center justify-center rounded-full transition-colors", active ? "bg-accent text-accent-foreground" : "text-muted-foreground")}>
                   <n.icon className="size-5" />
                 </span>
