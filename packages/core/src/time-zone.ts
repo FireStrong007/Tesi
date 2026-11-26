@@ -102,6 +102,16 @@ export const startOfDay = (ts: number) => {
   const p = localParts(ts);
   return zonedTime(p.year, p.month, p.day);
 };
+/** the start of the study's hour containing ts (23:10 → 23:00) */
+export const hourFloor = (ts: number) => {
+  const p = localParts(ts);
+  return zonedTime(p.year, p.month, p.day, p.hour);
+};
+/** the start of the next hour, or ts itself when it is a whole hour (07:06 → 08:00, 08:00 → 08:00) */
+export const hourCeil = (ts: number) => {
+  const f = hourFloor(ts);
+  return f === ts ? ts : f + 3600;
+};
 /** midnight n days after the day of dayStart (23 or 25 hours across daylight saving changes) */
 export const addDays = (dayStart: number, n: number) => {
   const p = localParts(dayStart);

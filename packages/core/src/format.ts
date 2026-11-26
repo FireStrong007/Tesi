@@ -35,7 +35,14 @@ export function fmtDuration(sec: number | null | undefined) {
 
 export const fmtTime = (ts: number) => new Date(ts * 1000).toLocaleTimeString("it-IT", { ...TZ, hour: "2-digit", minute: "2-digit" });
 export const fmtDay = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "short", day: "numeric", month: "short" });
-export const fmtDayLong = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "long", day: "numeric", month: "long", year: "numeric" });
+/**
+ * Dates are written as Italian sentences: only the first letter capital, months and weekdays inside
+ * lower case («Giovedì 26 novembre 2026», «Lun 23 nov – dom 29 nov»). The formatters that start a
+ * title capitalise it themselves; the pages never use CSS capitalize, which would capitalise every word.
+ */
+const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** "Giovedì 26 novembre 2026" */
+export const fmtDayLong = (ts: number) => sentence(new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "long", day: "numeric", month: "long", year: "numeric" }));
 export const fmtDateTime = (ts: number) =>
   new Date(ts * 1000).toLocaleString("it-IT", { ...TZ, day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 export const fmtWeekday = (ts: number) => new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "narrow" });
@@ -51,14 +58,12 @@ export const fmtDayRange = (from: number, last: number) => {
 /** "Novembre", with the year when it is not the current one ("Dicembre 2025") */
 export const fmtMonth = (ts: number) => {
   const sameYear = localParts(ts).year === localParts(Date.now() / 1000).year;
-  const s = new Date(ts * 1000).toLocaleDateString("it-IT", sameYear ? { ...TZ, month: "long" } : { ...TZ, month: "long", year: "numeric" });
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  return sentence(new Date(ts * 1000).toLocaleDateString("it-IT", sameYear ? { ...TZ, month: "long" } : { ...TZ, month: "long", year: "numeric" }));
 };
 /** "Martedì 27 ottobre" */
-export const fmtDayTitle = (ts: number) => {
-  const s = new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "long", day: "numeric", month: "long" });
-  return s.charAt(0).toUpperCase() + s.slice(1);
-};
+export const fmtDayTitle = (ts: number) => sentence(new Date(ts * 1000).toLocaleDateString("it-IT", { ...TZ, weekday: "long", day: "numeric", month: "long" }));
+/** a week as a title, last day included: "Lun 23 nov – dom 29 nov" */
+export const fmtWeekTitle = (from: number, last: number) => sentence(`${fmtDay(from)} – ${fmtDay(last)}`);
 
 export function fmtRelative(ts: number | null | undefined) {
   if (!ts) return "mai";

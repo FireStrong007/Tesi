@@ -199,7 +199,7 @@ export function DashboardPage() {
             </Tile>
           )}
           {sectionMode("energy") === "unavailable" && <Tile icon={<BatteryChargingIcon />} label="Body Battery" color="var(--energy)" value="–" sub={NOT_AVAILABLE} />}
-          <Tile icon={<DropletIcon />} label="SpO₂" color="var(--spo2)" value={fmtInt(d?.spo2Avg)} unit="%" sub={d?.spo2Avg != null ? (BRAND.id === "vitabridge" ? "Media notturna" : "Media") : none("spo2")} onClick={() => go("spo2")} />
+          <Tile icon={<DropletIcon />} label="SpO₂" color="var(--spo2)" value={fmtInt(d?.spo2Avg)} unit="%" sub={d?.spo2Avg != null ? (d.spo2AvgOf === "night" ? "Media notturna" : "Media del giorno") : none("spo2")} onClick={() => go("spo2")} />
           {d?.hrv || !d?.hrvValues.length ? (
             <Tile
               icon={<WavesIcon />}

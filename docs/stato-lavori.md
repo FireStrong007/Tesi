@@ -234,6 +234,33 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
   - HeartBridge 108 verifiche su 14 notti, VitaBridge 149: righe e testi, sfondo, linea dentro l'area, ogni misura isolata disegnata come punto, asse SpO2 ≤ 100, riquadro al passaggio solo su misure disegnate, nessun REM né irrequietezza in HeartBridge (presenti in VitaBridge);
   - 390 px e desktop, chiaro e scuro, console pulita.
 
+### Date e riquadri (26 novembre)
+- **Date:** si scrivono come frasi italiane, con la sola prima lettera maiuscola: «Giovedì 26 novembre 2026», «Lun 23 nov – dom 29 nov», «Novembre». Prima la classe CSS `capitalize` rendeva maiuscola ogni parola («Giovedì 26 Novembre 2026»).
+  - La maiuscola iniziale la mettono i formattatori di `packages/core/src/format.ts` (`fmtDayLong`, `fmtDayTitle`, `fmtMonth`, il nuovo `fmtWeekTitle`).
+  - Le pagine non usano più `capitalize`.
+  - Test in `time-zone.test.ts`, nei due fusi orari.
+- **Riquadri:** in una griglia a due colonne l'ultimo riquadro dispari occupa tutta la riga. In HeartBridge, senza REM, «Sveglio» è a tutta larghezza sotto Profondo e Leggero, nel giorno e nella media di settimana e mese. Tre riquadri su una riga a 390 px avrebbero troncato «5 h 31 min».
+  - Lo stesso in Dispositivi, solo sul telefono: «Ultimo caricamento dal telefono», terzo campo dopo la batteria in VitaBridge.
+- **Prova nel browser:** 45 pagine per app (Home, Dispositivi, Impostazioni, ogni metrica in Giorno, Settimana e Mese), 390 px e desktop. Nessuna data con il mese maiuscolo (testo come appare, CSS compreso), nessun riquadro da solo su mezza riga; console pulita.
+
+### Fascia del sonno, intervallo dei grafici del giorno, grafico delle fasi (26 novembre)
+- **Fascia del sonno** (battito, SpO2, respirazione e, in VitaBridge, Body Battery):
+  - il sottotitolo dice «La fascia evidenziata indica il sonno» e la legenda ha la voce «Sonno», con il colore della fascia;
+  - l'etichetta «Sonno» compare in alto dentro la fascia solo se c'è spazio (a 390 px, se la fascia è larga almeno 40 px);
+  - al passaggio del mouse o al tocco dentro la fascia, il riquadro aggiunge «Durante il sonno (23:10–07:06)» con gli orari veri, anche dove non c'è un valore;
+  - colori in `index.css` (`--sleep-band`, `-edge`, `-text`): nel tema scuro la fascia è più chiara della scheda, non più scura; un bordo su ogni lato la distingue in entrambi i temi.
+- **Grafici del giorno su 00:00–24:00:** la SpO2 andava dalle 18:00 del giorno prima. Ora tutti i grafici del giorno coprono 00:00–24:00: attività e sonno, passi, calorie, battito, stress, Body Battery, SpO2, respirazione, pressione, temperatura. La notte intera si vede nel grafico del sonno con «Ossigenazione».
+  - Anche i riquadri della SpO2 del giorno (minima, massima, letture, media) usano 00:00–24:00 e coincidono con la barra di quel giorno in Settimana e Mese e con il confronto.
+  - **Tessera SpO2 della Home** (entrambe le app): media sul sonno reale di quella notte, lo stesso periodo della fascia e del grafico delle fasi, con il nome «Media notturna». Coincide con «SpO₂ media» sotto il grafico del sonno. Se quella notte non c'è sonno registrato, o non ci sono misure SpO2 durante il sonno, mostra la media 00:00–24:00 con il nome «Media del giorno» (`spo2AvgOf` in `day-data.ts`). Prima era la media dalle 18:00 del giorno prima.
+- **Grafico delle fasi del sonno:**
+  - lo spazio dell'asse destro e della riga sopra il grafico è sempre riservato (`lib/sleep-overlay.ts`): attivando o togliendo una misura il grafico non si sposta;
+  - scala fissa per misura, allargata solo se un valore esce: battito 40–100 bpm, SpO2 85–100 % (mai sopra 100), respirazione 8–24 resp/min; l'unità sta in alto («100 bpm») e ci sono i valori intermedi;
+  - riquadri sotto il grafico: minimo, massimo e media della misura scelta; senza misura, le medie notturne di battito, SpO2 e respirazione, solo quelle con dati; in VitaBridge resta «Momenti di irrequietezza»;
+  - asse orizzontale dall'ora intera prima dell'addormentamento all'ora intera dopo il risveglio (23:10–07:06 → 23:00–08:00), un'etichetta per ogni ora compresa la prima; barre e linee negli orari veri;
+  - i pulsanti Battito, Ossigenazione e Respirazione dicono se sono attivi (`aria-pressed`).
+- **VitaBridge:** confrontando l'SVG con l'ultimo commit, passi, calorie, stress e «Attività e sonno» sono identici. Battito, respirazione e Body Battery hanno le stesse linee dei dati: cambiano solo fascia, bordi ed etichetta. Cambiano come richiesto la SpO2 del giorno e il grafico delle fasi.
+- **Prova nel browser:** HeartBridge 124 verifiche su 14 notti, VitaBridge 152 su 13, 390 px e desktop, tutte passate. Rifatta anche la prova delle date e dei riquadri.
+
 ### Dati per lo sviluppo
 - `data/gadgetbridge.db` e `data/GimaDB.db`: copie reali, mai in git, aperte solo in sola lettura.
 - `npm run gen:synthetic` crea `data/synthetic-garmin.db` (8 partecipanti) e `data/synthetic-gima.db` (6), con gli schemi reali e alcune sezioni volutamente vuote. `data/synthetic-gima.db` è stato rigenerato il 26 novembre con `--cohort 100` (106 partecipanti): ECG a 83,33 Hz, notti divise in due segmenti, distanza in metri come i dati veri. Con `-- --cohort N` si aggiungono N partecipanti Garmin con profili diversi (`SYN-C001`…): **servono per provare il confronto**, perché con i soli 8 predefiniti quasi tutti i giorni hanno meno di 5 altri partecipanti. Quello in `data/` oggi ha `--cohort 100`.
@@ -252,6 +279,7 @@ Il riferimento per il lavoro è `docs/piano-multiutente.md`. Questo file dice a 
 - **Obiettivi** sul server (`/api/me/settings`), **«Confronta» nascosto** fino alla Fase 4 (24 novembre).
 - **Distanza (regola B, 25 novembre):** si stima solo dove i passi non hanno nessuna distanza misurata dopo di loro nello stesso giorno: passi × passo medio della persona. Il passo medio si calcola dai suoi minuti coperti dalla distanza, se sono almeno 60 minuti e 1.000 passi; altrimenti vale il **valore predefinito di 75 cm**. Nell'interfaccia è indicata come «stimata» o «in parte stimata». È la stessa regola per tutti, anche nel confronto, perché sta nelle query di core.
 - **Sincronizzazione:** finestra di 3 giorni per tabella e per dispositivo, conteggi confrontati a ogni sincronizzazione (24 novembre).
+- **Grafici del giorno (26 novembre):** tutti su 00:00–24:00, SpO2 compresa (anche i suoi riquadri); SpO2 della Home = media notturna sul sonno reale, altrimenti «Media del giorno»; con la fascia del sonno evidenziata e nominata; nel grafico delle fasi spazio dell'asse destro fisso, scale fisse per misura, riquadri che seguono la misura scelta, asse a ore intere attorno alla notte.
 - **Linee dei grafici (26 novembre):** si spezzano dopo 2,5 volte la mediana degli intervalli della serie (mai meno del vecchio valore fisso), misure isolate come punti; nessuna eccezione per la SpO2 notturna di VitaBridge, coerente con il grafico SpO2 del giorno. SpO2 al massimo 100 %; REM e momenti di irrequietezza nascosti in HeartBridge.
 - **ECG in Grafici (26 novembre):** metrica con Giorno / Settimana / Mese al posto della pagina e della voce di menu; etichette delle valutazioni senza «(secondo il dispositivo)», con la nota sulle diagnosi una volta per riquadro.
 - **HeartBridge (26 novembre):** corallo e icona a cuore, sezioni mancanti configurabili («nascosta» oggi), ECG a 83,33 Hz da confermare con l'avviso, asse in unità del dispositivo, pressione e temperatura fuori dal confronto, battito a riposo non stimato.

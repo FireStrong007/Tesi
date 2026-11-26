@@ -8,7 +8,8 @@
  * so moving the finger only re-renders the cursor and the tooltip.
  */
 import type { MinuteSlot } from "@bridge/core/day-data";
-import { localParts } from "@bridge/core/time-zone";
+import { hourCeil, localParts } from "@bridge/core/time-zone";
+import { HYPNOGRAM_PAD, hypnogramPlot, type OverlayScale } from "@/lib/sleep-overlay";
 import { useId, useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -596,6 +597,14 @@ export interface Band {
   start: number;
   end: number;
   color: string;
+  /** a line on each side of the band (the sleep band: it reads on both themes) */
+  edge?: string;
+  /** a short name at the top inside the band, when it fits («Sonno») */
+  label?: string;
+  /** a line of the box under the pointer inside the band («Durante il sonno (23:10–07:06)») */
+  tip?: string;
+  /** the colour of the label and of the box's line */
+  text?: string;
 }
 
 /** the pause that breaks a series' line (seconds); none without `gap` */
@@ -679,9 +688,43 @@ export function TimeChart({
   const y = (v: number) => padT + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
 
   const background = useMemo(
-    () => bands.map((b, i) => <rect key={i} x={b.start - from} y={padT} width={Math.max(0, b.end - b.start)} height={plotH} fill={b.color} />),
+    () =>
+      bands.map((b, i) => (
+        <g key={i} data-band={b.label ?? ""}>
+          <rect x={b.start - from} y={padT} width={Math.max(0, b.end - b.start)} height={plotH} fill={b.color} />
+          {b.edge &&
+            [b.start, b.end].map((t) => <line key={t} x1={t - from} x2={t - from} y1={padT} y2={padT + plotH} stroke={b.edge} strokeWidth={1} vectorEffect="non-scaling-stroke" />)}
+        </g>
+      )),
     [bands, from, plotH],
   );
+  // the bands' names, in view coordinates (the text keeps its size): only where they fit
+  const bandLabels =
+    w > 0 &&
+    bands.map((b, i) => {
+      if (!b.label) return null;
+      const x0 = Math.max(x(b.start), padL);
+      const x1 = Math.min(x(b.end), padL + plotW);
+      const need = b.label.length * 6 + 10;
+      if (x1 - x0 < need) return null;
+      return (
+        <text
+          key={i}
+          x={(x0 + x1) / 2}
+          y={padT + 12}
+          textAnchor="middle"
+          className="text-[10px] font-medium"
+          fill={b.text ?? "var(--muted-foreground)"}
+          stroke="var(--card)"
+          strokeWidth={3}
+          paintOrder="stroke"
+          pointerEvents="none"
+          data-band-label=""
+        >
+          {b.label}
+        </text>
+      );
+    });
 
   const axes = useMemo(() => {
     if (!w) return null;
@@ -773,8 +816,11 @@ export function TimeChart({
       return p && Math.abs(p.timestamp - t) < tol ? p : null;
     });
     const first = vals.find((v) => v !== null);
-    if (first) {
-      const lx = x(first.timestamp);
+    // inside a band with a tip (the sleep): the box says so, with or without a value there
+    const inBand = bands.find((b) => b.tip && t >= b.start && t < b.end);
+    if (first || inBand) {
+      const at = first ? first.timestamp : t;
+      const lx = x(at);
       const many = vals.filter(Boolean).length > 1;
       hover = (
         <g pointerEvents="none">
@@ -785,8 +831,11 @@ export function TimeChart({
             width={w}
             plotLeft={padL}
             top={padT}
-            title={xTicks === "hours" ? fmtTime(first.timestamp) : xTicks === "elapsed" ? `${fmtDuration(first.timestamp - from)} · ore ${fmtTime(first.timestamp)}` : fmtShortDate(first.timestamp)}
-            lines={vals.flatMap((p, i) => (p ? [{ text: `${format(p.value)} ${series[i].label ?? ""}`.trim(), color: many ? series[i].color : undefined }] : []))}
+            title={xTicks === "hours" ? fmtTime(at) : xTicks === "elapsed" ? `${fmtDuration(at - from)} · ore ${fmtTime(at)}` : fmtShortDate(at)}
+            lines={[
+              ...vals.flatMap((p, i) => (p ? [{ text: `${format(p.value)} ${series[i].label ?? ""}`.trim(), color: many ? series[i].color : undefined }] : [])),
+              ...(inBand ? [{ text: inBand.tip!, color: inBand.text }] : []),
+            ]}
           />
         </g>
       );
@@ -804,6 +853,7 @@ export function TimeChart({
       </defs>
       <g clipPath={`url(#${clip})`}>
         <g transform={transform}>{background}</g>
+        {bandLabels}
       </g>
       {axes}
       <g clipPath={`url(#${clip})`}>
@@ -825,14 +875,25 @@ export interface Overlay {
   color: string;
   label: string;
   unit: string;
-  /** the axis never goes above this (SpO2: 100 %) */
-  max?: number;
+  /** the right axis: the measure's fixed scale (lib/sleep-overlay.ts overlayScale) */
+  scale: OverlayScale;
+}
+
+/** one label per hour of the view (the first one too) while they fit, otherwise the usual ticks */
+function everyHour(from: number, to: number, plotW: number, wide: boolean) {
+  const perHour = plotW / ((to - from) / 3600 || 1);
+  if (perHour < (wide ? 40 : 16)) return hourTicks(from, to, plotW, wide);
+  const ticks: number[] = [];
+  for (let t = hourCeil(from); t <= to; t += 3600) ticks.push(t);
+  return { ticks, label: (t: number) => (wide ? fmtTime(t) : String(localParts(t).hour)) };
 }
 
 /**
  * Sleep stages in rows (Sveglio, REM, Leggero, Profondo; `rows` leaves out the stages a device does
- * not measure) with an optional line on top (heart rate, SpO2, breathing). The rows' background is
- * the plot area: the line and its dots stay inside it.
+ * not measure) with an optional line on top (heart rate, SpO2, breathing). The time axis is
+ * [from, to] (the page passes whole hours around the night); the rows' background is the plot area
+ * and the line and its dots stay inside it. The right axis keeps its room with no line on top
+ * (lib/sleep-overlay.ts HYPNOGRAM_PAD): switching a measure on or off never moves the chart.
  */
 export function Hypnogram({
   segments,
@@ -850,66 +911,64 @@ export function Hypnogram({
   rows?: number[];
 }) {
   const [ref, { width: w }] = useSize<HTMLDivElement>();
-  const padL = 62;
-  const padR = overlay ? 34 : 4;
-  const padB = 20;
-  const plotW = Math.max(1, w - padL - padR);
-  const plotH = height - padB;
+  const { left: padL, width: plotW } = hypnogramPlot(w);
+  const padT = HYPNOGRAM_PAD.top;
+  const plotH = height - HYPNOGRAM_PAD.bottom - padT;
+  const plotR = padL + plotW;
   const rowH = plotH / rows.length;
   const rowOf = (stage: number) => rows.indexOf(stage);
   const ix = useChartInteraction({ ref, from, to, plotLeft: padL, plotWidth: plotW, zoomable: true });
   const { from: vf, to: vt } = ix.view;
   const clip = useClipId();
 
-  const [oLo, oHi] = useMemo(() => {
-    let mn = Infinity;
-    let mx = -Infinity;
-    for (const p of overlay?.points ?? []) {
-      if (p.value < mn) mn = p.value;
-      if (p.value > mx) mx = p.value;
-    }
-    if (mn > mx) return [0, 1];
-    const hi = Math.min(overlay?.max ?? Infinity, niceCeil(mx * 1.05));
-    return [Math.min(niceFloor(mn * 0.95), hi - 1), hi];
-  }, [overlay]);
+  const oLo = overlay?.scale.lo ?? 0;
+  const oHi = overlay?.scale.hi ?? 1;
   // the line's break and the reading's reach follow the series' own interval (core/line-gaps)
   const [gap, reach] = useMemo(() => [lineGap(overlay?.points ?? [], 900), readingReach(overlay?.points ?? [], 900)], [overlay]);
   const lonely = useMemo(() => isolatedPoints(overlay?.points ?? [], gap), [overlay, gap]);
 
   const x = (t: number) => padL + ((t - vf) / (vt - vf || 1)) * plotW;
-  const yO = (v: number) => 4 + (plotH - 8) - ((v - oLo) / (oHi - oLo || 1)) * (plotH - 8);
+  const yO = (v: number) => padT + 2 + (plotH - 4) - ((Math.min(oHi, Math.max(oLo, v)) - oLo) / (oHi - oLo || 1)) * (plotH - 4);
 
   const axes = useMemo(() => {
     if (!w) return null;
-    const { ticks, label } = hourTicks(vf, vt, plotW, w > 480);
+    const { ticks, label } = everyHour(vf, vt, plotW, w > 480);
     return (
       <g>
         {/* the plot area: one background under every row, every other row a little darker */}
-        <rect x={padL} y={0} width={plotW} height={plotH} fill="var(--chart-grid)" opacity={0.3} />
+        <rect x={padL} y={padT} width={plotW} height={plotH} fill="var(--chart-grid)" opacity={0.3} />
         {rows.map((st, i) => (
           <g key={st}>
-            {i % 2 === 1 && <rect x={padL} y={i * rowH} width={plotW} height={rowH} fill="var(--chart-grid)" opacity={0.45} />}
-            <text x={padL - 8} y={i * rowH + rowH / 2 + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
+            {i % 2 === 1 && <rect x={padL} y={padT + i * rowH} width={plotW} height={rowH} fill="var(--chart-grid)" opacity={0.45} />}
+            <text x={padL - 8} y={padT + i * rowH + rowH / 2 + 4} textAnchor="end" className="fill-muted-foreground text-[10px]">
               {STAGE_LABEL[st]}
             </text>
           </g>
         ))}
+        {/* the right axis of the measure on top: its unit with the highest value, above the plot */}
         {overlay &&
-          [oLo, oHi].map((v) => (
-            <text key={v} x={w - 2} y={yO(v) + 4} textAnchor="end" className="text-[10px]" fill={overlay.color}>
-              {Math.round(v)}
-            </text>
+          overlay.scale.ticks.map((v) => (
+            <g key={v} data-overlay-tick={v}>
+              <line x1={plotR} x2={plotR + 3} y1={yO(v)} y2={yO(v)} stroke={overlay.color} />
+              {v === oHi ? (
+                <text x={w - 2} y={padT - 3} textAnchor="end" className="text-[10px]" fill={overlay.color}>
+                  {`${fmtInt(v)} ${overlay.scale.unit}`}
+                </text>
+              ) : (
+                <text x={w - 2} y={yO(v) + 3.5} textAnchor="end" className="text-[10px]" fill={overlay.color}>
+                  {fmtInt(v)}
+                </text>
+              )}
+            </g>
           ))}
-        {ticks
-          .filter((t) => x(t) >= padL + 10)
-          .map((t) => (
-            <text key={t} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
-              {label(t)}
-            </text>
-          ))}
+        {ticks.map((t) => (
+          <text key={t} x={x(t)} y={height - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]" data-hour-tick="">
+            {label(t)}
+          </text>
+        ))}
       </g>
     );
-  }, [w, vf, vt, padR, height, overlay, oLo, oHi, rows]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [w, vf, vt, height, overlay, oLo, oHi, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // built once per data change, in seconds since `from` (see toView)
   const data = useMemo(() => {
@@ -927,7 +986,7 @@ export function Hypnogram({
             <rect
               key={`${s.start}:${s.end}`}
               x={s.start - from}
-              y={rowOf(s.stage) * rowH + 3}
+              y={padT + rowOf(s.stage) * rowH + 3}
               width={Math.max(0, s.end - s.start)}
               height={rowH - 6}
               fill={STAGE_COLOR[s.stage]}
@@ -947,7 +1006,7 @@ export function Hypnogram({
 
   let hover: ReactNode = null;
   if (ix.hoverX !== null && w > 0) {
-    const hx = clamp(ix.hoverX, padL, padL + plotW);
+    const hx = clamp(ix.hoverX, padL, plotR);
     const t = vf + ((hx - padL) / plotW) * (vt - vf);
     const seg = segments.find((s) => t >= s.start && t < s.end && rowOf(s.stage) >= 0);
     const near = overlay ? nearestPoint(overlay.points, t) : null;
@@ -958,9 +1017,9 @@ export function Hypnogram({
     if (lines.length)
       hover = (
         <g pointerEvents="none">
-          <Cursor x={hx} top={0} bottom={plotH} />
+          <Cursor x={hx} top={padT} bottom={padT + plotH} />
           {ov && overlay && <circle cx={x(ov.timestamp)} cy={yO(ov.value)} r={4} fill={overlay.color} stroke="var(--card)" strokeWidth={2} />}
-          <Tooltip x={hx} width={w} plotLeft={padL} top={2} title={fmtTime(t)} lines={lines} />
+          <Tooltip x={hx} width={w} plotLeft={padL} top={padT + 2} title={fmtTime(t)} lines={lines} />
         </g>
       );
   }
@@ -969,7 +1028,7 @@ export function Hypnogram({
     <Surface boxRef={ref} ix={ix} width={w} height={height} rangeLabel={hoursLabel}>
       <defs>
         <clipPath id={clip}>
-          <rect x={padL} y={0} width={plotW} height={plotH} />
+          <rect x={padL} y={padT} width={plotW} height={plotH} />
         </clipPath>
       </defs>
       {axes}
@@ -1203,8 +1262,8 @@ export interface LegendItem {
   label: string;
   color: string;
   value?: string;
-  /** "band": a translucent band with a line through it (an overlay with its range) */
-  kind?: "band";
+  /** "band": a translucent band with a line through it (an overlay with its range); "area": a highlighted span (the sleep band) */
+  kind?: "band" | "area";
 }
 
 export function Legend({ items }: { items: LegendItem[] }) {
@@ -1216,6 +1275,8 @@ export function Legend({ items }: { items: LegendItem[] }) {
             <span className="relative h-2.5 w-4 shrink-0 rounded-sm" style={{ background: `color-mix(in oklch, ${i.color} 22%, transparent)` }}>
               <span className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full" style={{ background: i.color }} />
             </span>
+          ) : i.kind === "area" ? (
+            <span className="h-2.5 w-4 shrink-0 rounded-sm border" style={{ background: i.color, borderColor: "var(--sleep-band-edge)" }} />
           ) : (
             <span className="size-2.5 shrink-0 rounded-sm" style={{ background: i.color }} />
           )}

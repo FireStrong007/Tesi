@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { ArrowLeftIcon, CalendarDaysIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { addDays, startOfDay } from "@bridge/core/db/queries";
-import { fmtDay, fmtDayLong, fmtMonth } from "@bridge/core/format";
+import { fmtDayLong, fmtMonth, fmtWeekTitle } from "@bridge/core/format";
 import { cn } from "@/lib/utils";
 import { dayKey, fromDayKey, monthStart, weekStart } from "@bridge/core/time-zone";
 
@@ -67,7 +67,7 @@ export function DateNav({ day, onChange, period = "day", compact = false }: { da
     period === "day" ? (
       <label className="hover:bg-accent relative flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium">
         <CalendarDaysIcon className="text-muted-foreground size-4 shrink-0" />
-        <span className="truncate capitalize">{day === today ? "Oggi" : day === addDays(today, -1) ? "Ieri" : fmtDayLong(day)}</span>
+        <span className="truncate">{day === today ? "Oggi" : day === addDays(today, -1) ? "Ieri" : fmtDayLong(day)}</span>
         <input
           type="date"
           aria-label="Scegli una data"
@@ -89,7 +89,7 @@ export function DateNav({ day, onChange, period = "day", compact = false }: { da
       </label>
     ) : (
       <div className="flex min-w-0 flex-1 items-center justify-center px-2 py-1.5 text-sm font-medium">
-        <span className="truncate">{period === "month" ? fmtMonth(day) : `${fmtDay(from)} – ${fmtDay(addDays(to, -1))}`}</span>
+        <span className="truncate">{period === "month" ? fmtMonth(day) : fmtWeekTitle(from, addDays(to, -1))}</span>
       </div>
     );
   return (

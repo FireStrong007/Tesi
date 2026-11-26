@@ -60,8 +60,15 @@ export interface DayData {
   energyNow: number | null;
   energyMax: number | null;
   energyMin: number | null;
+  /** the day's SpO2, 00:00–24:00 like the other day charts and like the day in Settimana / Mese */
   spo2: TimeValue[];
+  /**
+   * The Home's SpO2: the average over the night's real sleep (the same span as the sleep band and the
+   * sleep stages chart, so it equals the night's average under that chart); with no sleep that night,
+   * or no SpO2 during it, the average of the day 00:00–24:00. `spo2AvgOf` says which.
+   */
   spo2Avg: number | null;
+  spo2AvgOf: "night" | "day";
   resp: TimeValue[];
   respAvg: number | null;
   sleep: SleepSession | null;
@@ -93,6 +100,12 @@ export interface DayData {
 }
 
 const avg = (a: number[]) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+
+/** the Home's SpO2: the night's average when the night has SpO2, otherwise the day's */
+function spo2Average(night: TimeValue[], day: TimeValue[]): { spo2Avg: number | null; spo2AvgOf: "night" | "day" } {
+  const mean = (p: TimeValue[]) => (p.length ? p.reduce((s, x) => s + x.value, 0) / p.length : null);
+  return night.length ? { spo2Avg: mean(night), spo2AvgOf: "night" } : { spo2Avg: mean(day), spo2AvgOf: "day" };
+}
 
 export async function loadDay(db: SqlExecutor, userId: number, from: number): Promise<DayData> {
   const to = addDays(from, 1);
@@ -233,8 +246,8 @@ export async function loadDay(db: SqlExecutor, userId: number, from: number): Pr
     energyNow: energyVals.length ? energyVals[energyVals.length - 1] : null,
     energyMax: energyVals.length ? Math.max(...energyVals) : null,
     energyMin: energyVals.length ? Math.min(...energyVals) : null,
-    spo2: spo2.filter((s) => s.timestamp >= (sleep?.start ?? from) - 3600 && s.timestamp < to),
-    spo2Avg: avg(spo2.filter((s) => s.timestamp >= from - 6 * 3600 && s.timestamp < to).map((s) => s.value)),
+    spo2: within(spo2, from, to),
+    ...spo2Average(sleep ? within(spo2, sleep.start, sleep.end) : [], within(spo2, from, to)),
     resp,
     respAvg: avg(resp.map((r) => r.value)),
     sleep,

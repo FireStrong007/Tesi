@@ -17,9 +17,9 @@ const STALE_UPLOAD_MS = 24 * 3600_000;
 /** "GARMIN_VIVOSMART_5" -> "Garmin vivosmart 5" when the device has no better name */
 const humanType = (t: string | null) => (t ? t.toLowerCase().split("_").map((w, i) => (i === 0 ? w[0].toUpperCase() + w.slice(1) : w)).join(" ") : null);
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, wide }: { label: string; children: React.ReactNode; wide?: boolean }) {
   return (
-    <div className="min-w-0">
+    <div className={wide ? "col-span-2 min-w-0 md:col-span-1" : "min-w-0"}>
       <div className="text-muted-foreground text-xs">{label}</div>
       <div className="text-sm">{children}</div>
     </div>
@@ -60,7 +60,8 @@ function DeviceCard({ d, showBattery }: { d: DeviceInfo; showBattery: boolean })
             </Field>
           )}
           <Field label="Ultima misura">{d.last_measurement_at ? fmtDateTime(d.last_measurement_at / 1000) : "–"}</Field>
-          <Field label="Ultimo caricamento dal telefono">{d.last_successful_upload_at ? `${fmtDateTime(d.last_successful_upload_at / 1000)} (${fmtRelative(d.last_successful_upload_at / 1000)})` : "mai"}</Field>
+          {/* the third field on two columns (phone) takes the whole row */}
+          <Field label="Ultimo caricamento dal telefono" wide={showBattery}>{d.last_successful_upload_at ? `${fmtDateTime(d.last_successful_upload_at / 1000)} (${fmtRelative(d.last_successful_upload_at / 1000)})` : "mai"}</Field>
         </div>
         {stale && (
           <Alert>

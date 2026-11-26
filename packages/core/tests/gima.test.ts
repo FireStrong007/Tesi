@@ -138,6 +138,50 @@ describe("Gima adapter", () => {
     expect(d.sleepMinutes).toBe(430);
   });
 
+  it("the day's SpO2 is 00:00–24:00 like the other day charts and like that day in Settimana / Mese", async () => {
+    const db = gimaDb();
+    await fill(db);
+    // two measures the evening before (during the night that ends this day): not this day's
+    const prev = addDays(day, -1);
+    await db.batch([at(22, 0, prev), at(23, 45, prev)].map((t, i) => ({ sql: "INSERT INTO GIMA_SPO2_SAMPLE (TIMESTAMP, SPO2, DEVICE_ID, USER_ID) VALUES (?, ?, 1, 1)", params: [t, 90 + i] })));
+    await createAppTables(db, "heartbridge");
+    const d = await loadDay(db, 1, day);
+    expect(d.spo2.map((p) => p.timestamp)).toEqual([at(8) / 1000, at(10) / 1000]);
+    expect(d.spo2.every((p) => p.timestamp >= d.from && p.timestamp < d.to)).toBe(true);
+    // the same measures as the day's bar of the month
+    const r = await loadRange(db, 1, day, addDays(day, 1));
+    expect(r.spo2[0]).toMatchObject({ count: d.spo2.length, avg: 96 });
+    // the sleep chart keeps the night's measure of the evening before (the night is 23:30–07:30)
+    expect(d.sleepSpo2.map((p) => p.value)).toEqual([91]);
+  });
+
+  it("the Home's SpO2 with a night: the average over the real sleep, like the one under the sleep chart", async () => {
+    const db = gimaDb();
+    await fill(db);
+    // 22:00 the evening before (awake: not the night's), 23:45 and 03:00 (asleep)
+    const rows = [[at(22, 0, addDays(day, -1)), 88], [at(23, 45, addDays(day, -1)), 91], [at(3), 93]];
+    await db.batch(rows.map((r) => ({ sql: "INSERT INTO GIMA_SPO2_SAMPLE (TIMESTAMP, SPO2, DEVICE_ID, USER_ID) VALUES (?, ?, 1, 1)", params: r })));
+    await createAppTables(db, "heartbridge");
+    const d = await loadDay(db, 1, day);
+    expect(d.spo2AvgOf).toBe("night");
+    expect(d.spo2Avg).toBe(92);
+    expect(d.spo2Avg).toBe(d.sleepSpo2.reduce((s, p) => s + p.value, 0) / d.sleepSpo2.length);
+  });
+
+  it("the Home's SpO2 with no sleep that night: the average of the day 00:00–24:00", async () => {
+    const db = gimaDb();
+    await fill(db);
+    await db.run("DELETE FROM GIMA_SLEEP_STAGE_SAMPLE");
+    await db.run("DELETE FROM GIMA_SLEEP_STATS_SAMPLE");
+    // the evening before is not this day
+    await db.run("INSERT INTO GIMA_SPO2_SAMPLE (TIMESTAMP, SPO2, DEVICE_ID, USER_ID) VALUES (?, 88, 1, 1)", [at(22, 0, addDays(day, -1))]);
+    await createAppTables(db, "heartbridge");
+    const d = await loadDay(db, 1, day);
+    expect(d.sleep).toBeNull();
+    expect(d.spo2AvgOf).toBe("day");
+    expect(d.spo2Avg).toBe(96); // 97 at 08:00 and 95 at 10:00
+  });
+
   it("ECG recordings: the device's values as they are, 0 and ai_heart above 300 as not given; the samples decoded", async () => {
     const db = gimaDb();
     await fill(db);

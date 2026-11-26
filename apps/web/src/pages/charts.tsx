@@ -68,12 +68,14 @@ import { loadDay, type DayData } from "@bridge/core/day-data";
 import { ECG_ASSESSMENTS } from "@bridge/core/gima/ecg";
 import { AssessmentBadge, EcgDotsChart, EcgValues, EcgViewer, NOT_A_DIAGNOSIS, assessmentColor, assessmentOf } from "@/components/ecg-parts";
 import { addDays, ecgRecordings, sleepTotal, startOfDay, type EcgRecording } from "@bridge/core/db/queries";
-import { estimatedLabel, fmtDay, fmtDayLong, fmtDayMonth, fmtDayRange, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmt1 } from "@bridge/core/format";
+import { estimatedLabel, fmtDayLong, fmtDayMonth, fmtDayRange, fmtDayTitle, fmtDistance, fmtMonth, fmtInt, fmtMinutes, fmtTime, fmtWeekday, fmtWeekTitle, fmt1 } from "@bridge/core/format";
 import { STRESS_LEVELS, STRESS_MIN_VALID, getValidDayHours, intensityScore, remaining, restingCalories, sleepDebt, stats, stressLevelOf, type StressKey } from "@bridge/core/metrics";
 import { loadRange, type DayAgg, type RangeData } from "@bridge/core/range-data";
 import { navigate, query, usePath } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { hypnogramRows, stageColor, stageEntries, stageLabel, tiledStages, type StageKey } from "@/lib/sleep-stages";
+import { nightTiles, overlayScale, type OverlayId } from "@/lib/sleep-overlay";
+import { hourCeil, hourFloor } from "@bridge/core/time-zone";
 import { stressLabel } from "./dashboard";
 
 type Icon = ComponentType<{ className?: string }>;
@@ -251,7 +253,7 @@ function EcgRange({ day, period, onOpen }: { day: number; period: Period; onOpen
   const { from, to } = periodRange(period, day);
   const { data: list } = useQuery(() => ecgRecordings(db, user.id, from, to), [from, to, user.id]);
   if (!list) return <Loading />;
-  const title = period === "month" ? fmtMonth(from) : `${fmtDay(from)} – ${fmtDay(addDaysLocal(to, -1))}`;
+  const title = period === "month" ? fmtMonth(from) : fmtWeekTitle(from, addDaysLocal(to, -1));
   if (!list.length) return <NoData>Nessun elettrocardiogramma in questo periodo.</NoData>;
   const hearts = list.map((x) => x.heart).filter((h): h is number => h != null);
   const counts = ECG_ASSESSMENTS.map((label) => ({ label, n: list.filter((x) => assessmentOf(x) === label).length })).filter((c) => c.n > 0);
@@ -341,7 +343,7 @@ function SummaryCard({ title, subtitle, gauge, children, note }: { title: ReactN
   return (
     <Card className="gap-4 py-5">
       <CardHeader className="px-5 text-center xl:text-left">
-        <CardTitle className="text-base capitalize">{title}</CardTitle>
+        <CardTitle className="text-base">{title}</CardTitle>
         {subtitle && <CardDescription>{subtitle}</CardDescription>}
       </CardHeader>
       <CardContent className="space-y-4 px-5">
@@ -361,11 +363,18 @@ interface TileSpec {
   sub?: ReactNode;
 }
 
-function Tiles({ items, cols = 2 }: { items: TileSpec[]; cols?: 2 | 3 | 4 }) {
+function Tiles({ items, cols = 2 }: { items: TileSpec[]; cols?: 2 | 3 | 4 | "2/3" }) {
   return (
-    <div className={cn("grid gap-2", cols === 2 ? "grid-cols-2" : cols === 3 ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-4")}>
-      {items.map((t) => (
-        <div key={t.label} className="bg-muted/40 relative min-w-0 overflow-hidden rounded-lg border px-3 py-2.5">
+    <div className={cn("grid gap-2", cols === 2 ? "grid-cols-2" : cols === 3 ? "grid-cols-3" : cols === "2/3" ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2 sm:grid-cols-4")}>
+      {items.map((t, i) => (
+        // two columns and an odd number of tiles: the last one takes the whole row (no tile left alone on half a row)
+        <div
+          key={t.label}
+          className={cn(
+            "bg-muted/40 relative min-w-0 overflow-hidden rounded-lg border px-3 py-2.5",
+            items.length % 2 === 1 && i === items.length - 1 && (cols === 2 ? "col-span-2" : cols === "2/3" && "col-span-2 sm:col-span-1"),
+          )}
+        >
           {t.color && <span className="absolute inset-y-0 left-0 w-1" style={{ background: t.color }} />}
           <div className="tabular truncate text-lg leading-tight font-semibold">
             {t.value}
@@ -441,7 +450,24 @@ const stageTiles = (m: SleepMinutes, suffix = "", sub?: (k: StageKey) => string 
       : { label: `${stageLabel(k)}${suffix}`, value: fmtMinutes(m[k]), color: stageColor(k), sub: sub?.(k) },
   );
 
-const sleepBand = (d: DayData) => (d.sleep ? [{ start: d.sleep.start, end: d.sleep.end, color: "color-mix(in oklch, var(--sleep-light) 12%, transparent)" }] : []);
+/** the night on the day charts: a highlighted band (index.css --sleep-band), «Sonno» at its top, the real times in the box */
+const sleepBand = (d: DayData) =>
+  d.sleep
+    ? [
+        {
+          start: d.sleep.start,
+          end: d.sleep.end,
+          color: "var(--sleep-band)",
+          edge: "var(--sleep-band-edge)",
+          text: "var(--sleep-band-text)",
+          label: "Sonno",
+          tip: `Durante il sonno (${fmtTime(d.sleep.start)}–${fmtTime(d.sleep.end)})`,
+        },
+      ]
+    : [];
+/** the legend's «Sonno», with the band's colour, when the day has a night */
+const sleepLegend = (d: DayData) => (d.sleep ? <Legend items={[{ label: "Sonno", color: "var(--sleep-band)", kind: "area" }]} /> : null);
+const SLEEP_BAND_NOTE = "La fascia evidenziata indica il sonno";
 
 /** the resting metabolic rate the band measured (Garmin RMR): no estimate from a profile */
 function bmrOf(rmr: number | null) {
@@ -631,7 +657,7 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
             </SummaryCard>
           }
         >
-          <ChartCard title="Frequenza cardiaca" description={RESTING === "shown" ? "La fascia chiara è il sonno, la linea tratteggiata il battito a riposo" : "La fascia chiara è il sonno"}>
+          <ChartCard title="Frequenza cardiaca" description={RESTING === "shown" ? `${SLEEP_BAND_NOTE}, la linea tratteggiata il battito a riposo` : SLEEP_BAND_NOTE}>
             <TimeChart
               from={d.from}
               to={d.to}
@@ -641,6 +667,7 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
               refLines={RESTING === "shown" && d.restingHr ? [{ value: d.restingHr, color: "var(--muted-foreground)", label: "Riposo" }] : []}
               bands={sleepBand(d)}
             />
+            {sleepLegend(d)}
           </ChartCard>
         </MetricLayout>
       );
@@ -702,8 +729,9 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
             </SummaryCard>
           }
         >
-          <ChartCard title="Body Battery durante il giorno" description="Sale mentre riposi, scende con attività e stress. La fascia chiara è il sonno">
+          <ChartCard title="Body Battery durante il giorno" description={`Sale mentre riposi, scende con attività e stress. ${SLEEP_BAND_NOTE}`}>
             <TimeChart from={d.from} to={d.to} yMin={0} yMax={100} height={260} series={[{ points: d.energy, color: "var(--energy)", area: true, gap: 1800, label: "" }]} bands={sleepBand(d)} />
+            {sleepLegend(d)}
           </ChartCard>
         </MetricLayout>
       );
@@ -726,8 +754,9 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
             </SummaryCard>
           }
         >
-          <ChartCard title="Saturazione (SpO₂)">
-            <TimeChart from={d.from - 6 * 3600} to={d.to} yMin={80} yMax={SPO2_MAX} height={240} series={[{ points: d.spo2, color: "var(--spo2)", dots: true, gap: 3600, label: "%" }]} />
+          <ChartCard title="Saturazione (SpO₂)" description={SLEEP_BAND_NOTE}>
+            <TimeChart from={d.from} to={d.to} yMin={80} yMax={SPO2_MAX} height={240} series={[{ points: d.spo2, color: "var(--spo2)", dots: true, gap: 3600, label: "%" }]} bands={sleepBand(d)} />
+            {sleepLegend(d)}
           </ChartCard>
         </MetricLayout>
       );
@@ -751,8 +780,9 @@ function DayView({ tab, day }: { tab: MetricId; day: number }) {
             </SummaryCard>
           }
         >
-          <ChartCard title="Frequenza respiratoria" description="La fascia chiara è il sonno">
+          <ChartCard title="Frequenza respiratoria" description={SLEEP_BAND_NOTE}>
             <TimeChart from={d.from} to={d.to} yMin={8} yMax={25} height={240} format={(v) => fmt1(v)} series={[{ points: d.resp, color: "var(--resp)", gap: 3600, label: "resp/min" }]} bands={sleepBand(d)} />
+            {sleepLegend(d)}
           </ChartCard>
         </MetricLayout>
       );
@@ -834,13 +864,23 @@ const OVERLAYS = [
 ] as const;
 
 function SleepDay({ d, goal }: { d: DayData; goal: number }) {
-  const [overlayId, setOverlayId] = useState<"hr" | "spo2" | "resp" | null>("hr");
+  const [overlayId, setOverlayId] = useState<OverlayId | null>("hr");
   const s = d.sleep;
   if (!s) return <NoData>Nessun sonno registrato per questa notte.</NoData>;
   const total = sleepTotal(s);
   const points = { hr: d.sleepHr, spo2: d.sleepSpo2, resp: d.sleepResp };
   const ov = OVERLAYS.find((o) => o.id === overlayId);
-  const overlay: Overlay | null = ov && points[ov.id].length ? { points: points[ov.id], color: ov.color, label: ov.label, unit: ov.unit, max: ov.id === "spo2" ? SPO2_MAX : undefined } : null;
+  const overlay: Overlay | null =
+    ov && points[ov.id].length ? { points: points[ov.id], color: ov.color, label: ov.label, unit: ov.unit, scale: overlayScale(ov.id, points[ov.id].map((p) => p.value)) } : null;
+  // the tiles under the chart: the measure on top, or the night's averages
+  const values = (id: OverlayId) => points[id].map((p) => p.value);
+  const night = nightTiles(overlay && ov ? ov.id : null, { hr: values("hr"), spo2: values("spo2"), resp: values("resp") });
+  const under = [
+    ...night,
+    ...(RESTLESS === "hidden"
+      ? []
+      : [RESTLESS === "unavailable" ? { label: "Momenti di irrequietezza", value: "–", sub: NOT_AVAILABLE } : { label: "Momenti di irrequietezza", value: fmtInt(d.restlessMoments), color: STAGE_COLOR[1] }]),
+  ];
   const debt = Math.max(0, goal - total);
   return (
     <MetricLayout
@@ -870,6 +910,8 @@ function SleepDay({ d, goal }: { d: DayData; goal: number }) {
                 <button
                   key={o.id}
                   disabled={!has}
+                  aria-pressed={on}
+                  aria-label={o.label}
                   onClick={() => setOverlayId(on ? null : o.id)}
                   title={has ? undefined : "Nessun dato per questa notte"}
                   className={cn(
@@ -886,24 +928,18 @@ function SleepDay({ d, goal }: { d: DayData; goal: number }) {
           </div>
         }
       >
-        <Hypnogram segments={s.segments} from={s.start} to={s.end} height={220} overlay={overlay} rows={hypnogramRows(REM)} />
+        {/* the axis from the whole hour before falling asleep to the one after waking up (23:10–07:06 → 23:00–08:00) */}
+        <Hypnogram segments={s.segments} from={hourFloor(s.start)} to={hourCeil(s.end)} height={234} overlay={overlay} rows={hypnogramRows(REM)} />
         <Legend items={[...stageMinutes(s.minutes).map((x) => ({ label: x.label, color: x.color })), ...(overlay ? [{ label: overlay.label, color: overlay.color }] : [])]} />
       </ChartCard>
-      <Card className="py-4">
-        <CardContent className="px-4">
-          <Tiles
-            cols={RESTLESS === "hidden" ? 3 : 4}
-            items={[
-              { label: "Battito minimo", value: fmtInt(d.sleepHrStats.min), unit: "bpm", color: "var(--heart)" },
-              { label: "Battito massimo", value: fmtInt(d.sleepHrStats.max), unit: "bpm", color: "var(--heart)" },
-              { label: "Battito medio", value: fmtInt(d.sleepHrStats.avg), unit: "bpm", color: "var(--heart)" },
-              ...(RESTLESS === "hidden"
-                ? []
-                : [RESTLESS === "unavailable" ? { label: "Momenti di irrequietezza", value: "–", sub: NOT_AVAILABLE } : { label: "Momenti di irrequietezza", value: fmtInt(d.restlessMoments), color: STAGE_COLOR[1] }]),
-            ]}
-          />
-        </CardContent>
-      </Card>
+      {under.length > 0 && (
+        <Card className="py-4">
+          <CardContent className="px-4">
+            {/* on the phone two columns (the third tile on its own row); one row on wider screens */}
+            <Tiles cols={under.length === 4 ? 4 : "2/3"} items={under} />
+          </CardContent>
+        </Card>
+      )}
     </MetricLayout>
   );
 }
@@ -946,7 +982,7 @@ function RangeView({
     twoLineLabels: weekly,
     height: 260,
   };
-  const title = period === "month" ? fmtMonth(range.from) : `${fmtDay(from)} – ${fmtDay(addDaysLocal(to, -1))}`;
+  const title = period === "month" ? fmtMonth(range.from) : fmtWeekTitle(from, addDaysLocal(to, -1));
   const base = useMemo(() => (r ? buildRange(tab, r, user, labelOf, { period }) : null), [r, tab, user, period]); // eslint-disable-line react-hooks/exhaustive-deps
   // comparison with the other users: only where configured, SpO2/HRV only when the user has data
   const cfg = COMPARE_PERIODS.includes(period) ? COMPARE[tab] : undefined;

@@ -53,6 +53,10 @@
   --ecg-normal: oklch(0.62 0.15 150);
   --ecg-other: oklch(0.74 0.16 70);
   --chart-grid: oklch(0.92 0.01 210);
+  /* the night on the day charts: a blue tint with an edge on each side and «Sonno» at its top */
+  --sleep-band: color-mix(in oklch, var(--sleep-light) 16%, transparent);
+  --sleep-band-edge: color-mix(in oklch, var(--sleep-light) 55%, transparent);
+  --sleep-band-text: oklch(0.45 0.1 260);
   /* heart-rate zones 1..5 (Gadgetbridge: grey, light blue, green, orange, red) */
   --zone-1: oklch(0.7 0.02 240);
   --zone-2: oklch(0.72 0.12 225);
@@ -86,6 +90,10 @@
   --input: oklch(1 0 0 / 14%);
   --ring: oklch(0.6 0.09 186);
   --chart-grid: oklch(1 0 0 / 8%);
+  /* on a dark card the tint is lighter than the card, not darker */
+  --sleep-band: color-mix(in oklch, var(--sleep-light) 24%, transparent);
+  --sleep-band-edge: color-mix(in oklch, var(--sleep-light) 60%, transparent);
+  --sleep-band-text: oklch(0.82 0.08 255);
   --goal: oklch(0.75 0.12 186);
   --stress-high: oklch(0.62 0.19 25);
   --rmr: oklch(0.68 0.14 265);
